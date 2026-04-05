@@ -7,30 +7,40 @@ freeAtHome.activateSignalHandling();
 const metaData = AddOn.readMetaData();
 const addOn = new AddOn.AddOn(metaData.id);
 
-// Channel reference from config: "<serialNumber>/ch<hexNumber>"
+// ── State ─────────────────────────────────────────────────────────────────────
+
 let targetChannelRef: string | undefined;
 let lampChannel: ApiChannel | undefined;
 
-/**
- * Maps a 0-100 input value to a hue angle (degrees):
- *   0   → green  (120°)
- *   50  → yellow  (60°)
- *   100 → red      (0°)
- */
-function valueToHueDegrees(value: number): number {
-    return 120 * (1 - Math.max(0, Math.min(100, value)) / 100);
+let addValue      = 0;  // current value of the "add" actuator
+let subtractValue = 0;  // current value of the "subtract" actuator
+
+// 4 configurable colors (hue in degrees 0–360) and 3 thresholds that split the
+// 0–100 range into 4 zones.
+// Default: green / yellow / orange / red
+let colors: [number, number, number, number] = [120, 60, 30, 0];
+let thresholds: [number, number, number] = [25, 50, 75];
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function currentNet(): number {
+    return Math.max(0, Math.min(100, addValue - subtractValue));
 }
 
-/**
- * Finds the real ApiChannel matching "<serialNumber>/ch<hex>" from config.
- */
+/** Returns the configured hue (degrees) for the current net value. */
+function netToHueDegrees(net: number): number {
+    if (net < thresholds[0]) return colors[0];
+    if (net < thresholds[1]) return colors[1];
+    if (net < thresholds[2]) return colors[2];
+    return colors[3];
+}
+
 async function resolveLampChannel(ref: string): Promise<ApiChannel | undefined> {
     const parts = ref.split('/');
     if (parts.length !== 2) {
         console.error(`[StatusLamp] Invalid channel reference: "${ref}"`);
         return undefined;
     }
-
     const [serial, channelStr] = parts;
     const channelNumber = parseInt(channelStr.substring(2), 16); // "ch0001" → 1
 
@@ -40,12 +50,11 @@ async function resolveLampChannel(ref: string): Promise<ApiChannel | undefined> 
             return ch;
         }
     }
-
     console.error(`[StatusLamp] Channel not found: ${ref}`);
     return undefined;
 }
 
-async function setLampColor(inputValue: number): Promise<void> {
+async function updateLamp(): Promise<void> {
     if (!lampChannel) {
         if (!targetChannelRef) {
             console.warn('[StatusLamp] No target lamp configured yet');
@@ -55,36 +64,50 @@ async function setLampColor(inputValue: number): Promise<void> {
         if (!lampChannel) return;
     }
 
-    if (inputValue <= 0) {
+    const net = currentNet();
+
+    if (net <= 0) {
         await lampChannel.setInputDatapoint(PairingIds.AL_SWITCH_ON_OFF, '0');
-        console.log('[StatusLamp] Lamp turned OFF');
+        console.log('[StatusLamp] Lamp OFF (net=0)');
         return;
     }
 
-    const hueDeg = valueToHueDegrees(inputValue);
-    // SDK hsvTouint32 expects normalized values 0–1
-    const hueNorm = hueDeg / 360;
-    const encoded = Utilities.hsvTouint32(hueNorm, 1, 1).toString();
+    const hueDeg  = netToHueDegrees(net);
+    const encoded = Utilities.hsvTouint32(hueDeg / 360, 1, 1).toString();
 
     await lampChannel.setInputDatapoint(PairingIds.AL_SWITCH_ON_OFF, '1');
     await lampChannel.setInputDatapoint(PairingIds.AL_HSV, encoded);
 
-    console.log(`[StatusLamp] Input=${inputValue} → Hue=${Math.round(hueDeg)}° → HSV encoded=${encoded}`);
+    console.log(`[StatusLamp] add=${addValue} sub=${subtractValue} net=${net} → Hue=${hueDeg}° encoded=${encoded}`);
 }
 
-async function main(): Promise<void> {
-    const dimInput = await freeAtHome.createDimActuatorDevice('statuslamp-input', 'Status Input');
-    dimInput.setAutoKeepAlive(true);
-    dimInput.isAutoConfirm = true;
+// ── Main ──────────────────────────────────────────────────────────────────────
 
-    dimInput.on('isOnChanged', async (isOn: boolean) => {
-        if (!isOn) {
-            await setLampColor(0);
-        }
+async function main(): Promise<void> {
+    // Addier-Aktor
+    const dimAdd = await freeAtHome.createDimActuatorDevice('statuslamp-add', 'Status Addieren');
+    dimAdd.setAutoKeepAlive(true);
+    dimAdd.isAutoConfirm = true;
+
+    dimAdd.on('isOnChanged', async (isOn: boolean) => {
+        if (!isOn) { addValue = 0; await updateLamp(); }
+    });
+    dimAdd.on('absoluteValueChanged', async (value: number) => {
+        addValue = value;
+        await updateLamp();
     });
 
-    dimInput.on('absoluteValueChanged', async (value: number) => {
-        await setLampColor(value);
+    // Subtrahier-Aktor
+    const dimSub = await freeAtHome.createDimActuatorDevice('statuslamp-sub', 'Status Subtrahieren');
+    dimSub.setAutoKeepAlive(true);
+    dimSub.isAutoConfirm = true;
+
+    dimSub.on('isOnChanged', async (isOn: boolean) => {
+        if (!isOn) { subtractValue = 0; await updateLamp(); }
+    });
+    dimSub.on('absoluteValueChanged', async (value: number) => {
+        subtractValue = value;
+        await updateLamp();
     });
 
     console.log('[StatusLamp] Addon started – waiting for configuration');
@@ -92,18 +115,43 @@ async function main(): Promise<void> {
 
 main().catch(err => console.error('[StatusLamp] Startup error:', err));
 
-// Configuration updates
+// ── Configuration ─────────────────────────────────────────────────────────────
+
+function parseColor(value: unknown, fallback: number): number {
+    const n = Number(value);
+    return isFinite(n) ? Math.max(0, Math.min(360, n)) : fallback;
+}
+
+function parseThreshold(value: unknown, fallback: number): number {
+    const n = Number(value);
+    return isFinite(n) ? Math.max(0, Math.min(100, n)) : fallback;
+}
+
 addOn.on('configurationChanged', async (configuration: AddOn.Configuration) => {
-    console.log('[StatusLamp] Configuration changed:', configuration);
-
     const items = configuration['default']?.items ?? {};
-    const newRef = typeof items['targetLamp'] === 'string' ? items['targetLamp'] : undefined;
 
+    const newRef = typeof items['targetLamp'] === 'string' ? items['targetLamp'] : undefined;
     if (newRef && newRef !== targetChannelRef) {
         targetChannelRef = newRef;
-        lampChannel = undefined; // force re-resolve on next setLampColor
-        console.log(`[StatusLamp] Target lamp set to: ${targetChannelRef}`);
+        lampChannel = undefined;
+        console.log(`[StatusLamp] Target lamp → ${targetChannelRef}`);
     }
+
+    colors = [
+        parseColor(items['color1Hue'], 120),
+        parseColor(items['color2Hue'],  60),
+        parseColor(items['color3Hue'],  30),
+        parseColor(items['color4Hue'],   0),
+    ];
+
+    thresholds = [
+        parseThreshold(items['threshold1'], 25),
+        parseThreshold(items['threshold2'], 50),
+        parseThreshold(items['threshold3'], 75),
+    ];
+
+    console.log(`[StatusLamp] Config: colors=${colors} thresholds=${thresholds}`);
+    await updateLamp();
 });
 
 addOn.connectToConfiguration();

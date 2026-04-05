@@ -3,7 +3,7 @@
     "version": "1.0.0",
     "id": "de.busch-jaeger.freeathome.statuslamp",
     "license": "MIT",
-    "description": "Nimmt einen Dimmwert (0–100) entgegen und setzt eine echte RGB-Lampe farblich: grün → gelb → rot",
+    "description": "Zwei Dimm-Aktoren (Addieren / Subtrahieren) steuern per Nettowert eine echte RGB-Lampe in 4 konfigurierbaren Farben",
     "url": "https://www.busch-jaeger.de",
     "author": "Busch Jaeger",
     "type": "app",
@@ -22,6 +22,55 @@
                         { "type": "FID_RGB_ACTUATOR_TYPE8" },
                         { "type": "FID_RGB_W_ACTUATOR_TYPE8" }
                     ]
+                },
+                "threshold1": {
+                    "name": "Schwelle Zone 1→2 (0–100)",
+                    "type": "number",
+                    "min": 0,
+                    "max": 100,
+                    "default": 25
+                },
+                "threshold2": {
+                    "name": "Schwelle Zone 2→3 (0–100)",
+                    "type": "number",
+                    "min": 0,
+                    "max": 100,
+                    "default": 50
+                },
+                "threshold3": {
+                    "name": "Schwelle Zone 3→4 (0–100)",
+                    "type": "number",
+                    "min": 0,
+                    "max": 100,
+                    "default": 75
+                },
+                "color1Hue": {
+                    "name": "Farbe Zone 1 – Farbton (0–360°)",
+                    "type": "number",
+                    "min": 0,
+                    "max": 360,
+                    "default": 120
+                },
+                "color2Hue": {
+                    "name": "Farbe Zone 2 – Farbton (0–360°)",
+                    "type": "number",
+                    "min": 0,
+                    "max": 360,
+                    "default": 60
+                },
+                "color3Hue": {
+                    "name": "Farbe Zone 3 – Farbton (0–360°)",
+                    "type": "number",
+                    "min": 0,
+                    "max": 360,
+                    "default": 30
+                },
+                "color4Hue": {
+                    "name": "Farbe Zone 4 – Farbton (0–360°)",
+                    "type": "number",
+                    "min": 0,
+                    "max": 360,
+                    "default": 0
                 }
             }
         }
