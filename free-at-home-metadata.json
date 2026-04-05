@@ -3,7 +3,7 @@
     "version": "1.0.0",
     "id": "de.busch-jaeger.freeathome.statuslamp",
     "license": "MIT",
-    "description": "Addiert mehrere Dimmwerte und setzt eine RGB-Statuslampe entsprechend der Summe (grün → gelb → rot)",
+    "description": "Nimmt einen Dimmwert (0–100) entgegen und setzt eine echte RGB-Lampe farblich: grün → gelb → rot",
     "url": "https://www.busch-jaeger.de",
     "author": "Busch Jaeger",
     "type": "app",
@@ -12,23 +12,16 @@
         "default": {
             "name": "Einstellungen",
             "items": {
-                "numberOfInputs": {
-                    "name": "Anzahl Eingänge",
-                    "type": "number",
-                    "min": 1,
-                    "max": 10
-                },
-                "yellowThreshold": {
-                    "name": "Gelb-Schwelle (%)",
-                    "type": "number",
-                    "min": 0,
-                    "max": 100
-                },
-                "redThreshold": {
-                    "name": "Rot-Schwelle (%)",
-                    "type": "number",
-                    "min": 0,
-                    "max": 100
+                "targetLamp": {
+                    "name": "Statuslampe (RGB-Kanal)",
+                    "type": "channel",
+                    "filters": [
+                        { "type": "FID_RGB_ACTUATOR" },
+                        { "type": "FID_RGB_W_ACTUATOR" },
+                        { "type": "FID_DALI_DT8_RGB_ACTUATOR" },
+                        { "type": "FID_RGB_ACTUATOR_TYPE8" },
+                        { "type": "FID_RGB_W_ACTUATOR_TYPE8" }
+                    ]
                 }
             }
         }

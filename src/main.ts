@@ -1,6 +1,5 @@
-import { FreeAtHome, AddOn } from '@busch-jaeger/free-at-home';
-import { DimActuatorChannel } from '@busch-jaeger/free-at-home/lib/virtualChannels/dimActuatorChannel';
-import { RGBChannel } from '@busch-jaeger/free-at-home/lib/virtualChannels/rgbChannel';
+import { FreeAtHome, PairingIds, AddOn, Utilities } from '@busch-jaeger/free-at-home';
+import { ApiChannel } from '@busch-jaeger/free-at-home/lib/api/apiChannel';
 
 const freeAtHome = new FreeAtHome();
 freeAtHome.activateSignalHandling();
@@ -8,101 +7,87 @@ freeAtHome.activateSignalHandling();
 const metaData = AddOn.readMetaData();
 const addOn = new AddOn.AddOn(metaData.id);
 
-// Current configuration (updated on configurationChanged)
-let numberOfInputs = 3;
-let yellowThreshold = 33;  // % of max sum where color starts shifting to yellow
-let redThreshold = 66;     // % of max sum where color turns fully red
-
-// Runtime state
-const inputValues: number[] = [];
-let statusLamp: RGBChannel | undefined;
-let inputActors: DimActuatorChannel[] = [];
-let initialized = false;
+// Channel reference from config: "<serialNumber>/ch<hexNumber>"
+let targetChannelRef: string | undefined;
+let lampChannel: ApiChannel | undefined;
 
 /**
- * Maps a sum ratio (0–1) to an HSV hue:
- *   0.0 → green  (120°)
- *   0.5 → yellow  (60°)
- *   1.0 → red     (0°)
+ * Maps a 0-100 input value to a hue angle (degrees):
+ *   0   → green  (120°)
+ *   50  → yellow  (60°)
+ *   100 → red      (0°)
  */
-function sumToHue(ratio: number): number {
-    const clampedRatio = Math.max(0, Math.min(1, ratio));
-    // Hue goes from 120 (green) down to 0 (red)
-    return Math.round(120 * (1 - clampedRatio));
+function valueToHueDegrees(value: number): number {
+    return 120 * (1 - Math.max(0, Math.min(100, value)) / 100);
 }
 
-function updateStatusLamp(): void {
-    if (!statusLamp) return;
-
-    const sum = inputValues.reduce((acc, v) => acc + v, 0);
-    const maxSum = numberOfInputs * 100;
-    const ratio = maxSum > 0 ? sum / maxSum : 0;
-
-    const hue = sumToHue(ratio);
-    const saturation = sum > 0 ? 100 : 0;   // grey when all values are 0
-    const value = 100;                         // always full brightness
-
-    console.log(`[StatusLamp] Sum=${sum}/${maxSum} (${(ratio * 100).toFixed(1)}%) → HSV(${hue}°, ${saturation}%, ${value}%)`);
-
-    statusLamp.setHSV(hue, saturation, value);
-    statusLamp.setColorMode("hsv");
-    statusLamp.setOn(sum > 0);
-}
-
-async function setupDevices(numInputs: number): Promise<void> {
-    // Tear down previous listeners (the SDK doesn't support removing virtual
-    // devices, so we just reassign the event handlers on the existing channels)
-    inputActors.forEach(actor => actor.removeAllListeners());
-
-    inputActors = [];
-    inputValues.length = 0;
-
-    for (let i = 0; i < numInputs; i++) {
-        inputValues.push(0);
-
-        const actor = await freeAtHome.createDimActuatorDevice(
-            `statuslamp-input-${i}`,
-            `Status Input ${i + 1}`
-        );
-        actor.setAutoKeepAlive(true);
-        actor.isAutoConfirm = true;
-
-        const index = i;
-
-        actor.on('isOnChanged', (isOn: boolean) => {
-            if (!isOn) {
-                inputValues[index] = 0;
-                console.log(`[Input ${index + 1}] turned OFF → value reset to 0`);
-                updateStatusLamp();
-            }
-        });
-
-        actor.on('absoluteValueChanged', (value: number) => {
-            inputValues[index] = value;
-            console.log(`[Input ${index + 1}] value changed to ${value}`);
-            updateStatusLamp();
-        });
-
-        inputActors.push(actor);
+/**
+ * Finds the real ApiChannel matching "<serialNumber>/ch<hex>" from config.
+ */
+async function resolveLampChannel(ref: string): Promise<ApiChannel | undefined> {
+    const parts = ref.split('/');
+    if (parts.length !== 2) {
+        console.error(`[StatusLamp] Invalid channel reference: "${ref}"`);
+        return undefined;
     }
 
-    console.log(`[StatusLamp] Created ${numInputs} input actor(s)`);
+    const [serial, channelStr] = parts;
+    const channelNumber = parseInt(channelStr.substring(2), 16); // "ch0001" → 1
+
+    const allChannels = await freeAtHome.getAllChannels();
+    for (const ch of allChannels) {
+        if (ch.serialNumber === serial && ch.channelNumber === channelNumber) {
+            return ch;
+        }
+    }
+
+    console.error(`[StatusLamp] Channel not found: ${ref}`);
+    return undefined;
+}
+
+async function setLampColor(inputValue: number): Promise<void> {
+    if (!lampChannel) {
+        if (!targetChannelRef) {
+            console.warn('[StatusLamp] No target lamp configured yet');
+            return;
+        }
+        lampChannel = await resolveLampChannel(targetChannelRef);
+        if (!lampChannel) return;
+    }
+
+    if (inputValue <= 0) {
+        await lampChannel.setInputDatapoint(PairingIds.AL_SWITCH_ON_OFF, '0');
+        console.log('[StatusLamp] Lamp turned OFF');
+        return;
+    }
+
+    const hueDeg = valueToHueDegrees(inputValue);
+    // SDK hsvTouint32 expects normalized values 0–1
+    const hueNorm = hueDeg / 360;
+    const encoded = Utilities.hsvTouint32(hueNorm, 1, 1).toString();
+
+    await lampChannel.setInputDatapoint(PairingIds.AL_SWITCH_ON_OFF, '1');
+    await lampChannel.setInputDatapoint(PairingIds.AL_HSV, encoded);
+
+    console.log(`[StatusLamp] Input=${inputValue} → Hue=${Math.round(hueDeg)}° → HSV encoded=${encoded}`);
 }
 
 async function main(): Promise<void> {
-    // Create the RGB status lamp
-    statusLamp = await freeAtHome.createRGBDevice('statuslamp-rgb', 'Status Lamp');
-    statusLamp.setAutoKeepAlive(true);
-    statusLamp.isAutoConfirm = true;
+    const dimInput = await freeAtHome.createDimActuatorDevice('statuslamp-input', 'Status Input');
+    dimInput.setAutoKeepAlive(true);
+    dimInput.isAutoConfirm = true;
 
-    statusLamp.on('isOnChanged', (isOn: boolean) => {
-        console.log(`[StatusLamp] on/off changed to: ${isOn ? 'on' : 'off'}`);
+    dimInput.on('isOnChanged', async (isOn: boolean) => {
+        if (!isOn) {
+            await setLampColor(0);
+        }
     });
 
-    await setupDevices(numberOfInputs);
-    initialized = true;
+    dimInput.on('absoluteValueChanged', async (value: number) => {
+        await setLampColor(value);
+    });
 
-    console.log('[StatusLamp] Addon started successfully');
+    console.log('[StatusLamp] Addon started – waiting for configuration');
 }
 
 main().catch(err => console.error('[StatusLamp] Startup error:', err));
@@ -112,28 +97,13 @@ addOn.on('configurationChanged', async (configuration: AddOn.Configuration) => {
     console.log('[StatusLamp] Configuration changed:', configuration);
 
     const items = configuration['default']?.items ?? {};
+    const newRef = typeof items['targetLamp'] === 'string' ? items['targetLamp'] : undefined;
 
-    const newNumInputs = typeof items['numberOfInputs'] === 'number'
-        ? Math.max(1, Math.min(10, items['numberOfInputs']))
-        : numberOfInputs;
-
-    yellowThreshold = typeof items['yellowThreshold'] === 'number'
-        ? Math.max(0, Math.min(100, items['yellowThreshold']))
-        : yellowThreshold;
-
-    redThreshold = typeof items['redThreshold'] === 'number'
-        ? Math.max(0, Math.min(100, items['redThreshold']))
-        : redThreshold;
-
-    if (initialized && newNumInputs !== numberOfInputs) {
-        numberOfInputs = newNumInputs;
-        await setupDevices(numberOfInputs);
-    } else {
-        numberOfInputs = newNumInputs;
+    if (newRef && newRef !== targetChannelRef) {
+        targetChannelRef = newRef;
+        lampChannel = undefined; // force re-resolve on next setLampColor
+        console.log(`[StatusLamp] Target lamp set to: ${targetChannelRef}`);
     }
-
-    // Recalculate with new thresholds
-    updateStatusLamp();
 });
 
 addOn.connectToConfiguration();
