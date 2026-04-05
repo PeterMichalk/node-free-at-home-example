@@ -3,7 +3,7 @@
     "version": "1.0.0",
     "id": "de.busch-jaeger.freeathome.statuslamp",
     "license": "MIT",
-    "description": "Zwei Dimm-Aktoren (Addieren / Subtrahieren) steuern per Nettowert eine echte RGB-Lampe in 4 konfigurierbaren Farben",
+    "description": "Addiert/Subtrahiert Werte und setzt eine virtuelle RGB-Statuslampe in 4 konfigurierbaren Farben. Die virtuelle Lampe mit der echten Lampe im free@home App verknüpfen.",
     "url": "https://www.busch-jaeger.de",
     "author": "Busch Jaeger",
     "type": "app",
@@ -12,17 +12,6 @@
         "default": {
             "name": "Einstellungen",
             "items": {
-                "targetLamp": {
-                    "name": "Statuslampe (RGB-Kanal)",
-                    "type": "channel",
-                    "filters": [
-                        { "type": "FID_RGB_ACTUATOR" },
-                        { "type": "FID_RGB_W_ACTUATOR" },
-                        { "type": "FID_DALI_DT8_RGB_ACTUATOR" },
-                        { "type": "FID_RGB_ACTUATOR_TYPE8" },
-                        { "type": "FID_RGB_W_ACTUATOR_TYPE8" }
-                    ]
-                },
                 "threshold1": {
                     "name": "Schwelle Zone 1→2",
                     "type": "number",
