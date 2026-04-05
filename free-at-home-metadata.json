@@ -1,36 +1,36 @@
 {
-  "name": "Example for free@home addons",
-  "version": "1.0.0",
-  "id": "de.busch-jaeger.freeathome.example",
-  "license": "MIT",
-  "description": "Example for free@home addons",
-  "url": "https://www.busch-jaeger.de",
-  "author": "Busch Jaeger",
-  "type": "app",
-  "entryPoint": "build/main.js",
-  "parameters": {
-      "default": {
-          "name": "Settings",
-          "items": {
-              "username": {
-                  "name": "Username",
-                  "type": "string"
-              },
-              "apiKey": {
-                  "name": "API Key",
-                  "type": "string"
-              },
-              "ignoreReachability": {
-                  "name": "Ignore reachability",
-                  "type": "boolean"
-              },
-              "port": {
-                  "name": "Port",
-                  "type": "number",
-                  "min": 1024,
-                  "max": 65535
-              }
-          }
-      }
-  }
+    "name": "Status Lamp Addon",
+    "version": "1.0.0",
+    "id": "de.busch-jaeger.freeathome.statuslamp",
+    "license": "MIT",
+    "description": "Addiert mehrere Dimmwerte und setzt eine RGB-Statuslampe entsprechend der Summe (grün → gelb → rot)",
+    "url": "https://www.busch-jaeger.de",
+    "author": "Busch Jaeger",
+    "type": "app",
+    "entryPoint": "build/main.js",
+    "parameters": {
+        "default": {
+            "name": "Einstellungen",
+            "items": {
+                "numberOfInputs": {
+                    "name": "Anzahl Eingänge",
+                    "type": "number",
+                    "min": 1,
+                    "max": 10
+                },
+                "yellowThreshold": {
+                    "name": "Gelb-Schwelle (%)",
+                    "type": "number",
+                    "min": 0,
+                    "max": 100
+                },
+                "redThreshold": {
+                    "name": "Rot-Schwelle (%)",
+                    "type": "number",
+                    "min": 0,
+                    "max": 100
+                }
+            }
+        }
+    }
 }
