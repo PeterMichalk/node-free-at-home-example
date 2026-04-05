@@ -1,5 +1,6 @@
 import { FreeAtHome, PairingIds, AddOn, Utilities } from '@busch-jaeger/free-at-home';
 import { ApiChannel } from '@busch-jaeger/free-at-home/lib/api/apiChannel';
+import { DimActuatorChannel } from '@busch-jaeger/free-at-home/lib/virtualChannels/dimActuatorChannel';
 
 const freeAtHome = new FreeAtHome();
 freeAtHome.activateSignalHandling();
@@ -12,26 +13,21 @@ const addOn = new AddOn.AddOn(metaData.id);
 let targetChannelRef: string | undefined;
 let lampChannel: ApiChannel | undefined;
 
-let addValue      = 0;  // current value of the "add" actuator
-let subtractValue = 0;  // current value of the "subtract" actuator
+// Internal accumulator – unbounded, can exceed 100
+let internalSum = 0;
 
-// 4 configurable colors (hue in degrees 0–360) and 3 thresholds that split the
-// 0–100 range into 4 zones.
-// Default: green / yellow / orange / red
+// 4 configurable colors (hue 0–360°) and 3 thresholds (unbounded)
 let colors: [number, number, number, number] = [120, 60, 30, 0];
 let thresholds: [number, number, number] = [25, 50, 75];
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function currentNet(): number {
-    return Math.max(0, Math.min(100, addValue - subtractValue));
-}
-
-/** Returns the configured hue (degrees) for the current net value. */
-function netToHueDegrees(net: number): number {
-    if (net < thresholds[0]) return colors[0];
-    if (net < thresholds[1]) return colors[1];
-    if (net < thresholds[2]) return colors[2];
+/** Returns the hue for the current internalSum based on configured zones. */
+function sumToHueDegrees(sum: number): number {
+    if (sum <= 0)             return colors[0]; // handled separately (lamp off)
+    if (sum < thresholds[0]) return colors[0];
+    if (sum < thresholds[1]) return colors[1];
+    if (sum < thresholds[2]) return colors[2];
     return colors[3];
 }
 
@@ -64,50 +60,56 @@ async function updateLamp(): Promise<void> {
         if (!lampChannel) return;
     }
 
-    const net = currentNet();
-
-    if (net <= 0) {
+    if (internalSum <= 0) {
         await lampChannel.setInputDatapoint(PairingIds.AL_SWITCH_ON_OFF, '0');
-        console.log('[StatusLamp] Lamp OFF (net=0)');
+        console.log(`[StatusLamp] Lamp OFF (sum=${internalSum})`);
         return;
     }
 
-    const hueDeg  = netToHueDegrees(net);
+    const hueDeg  = sumToHueDegrees(internalSum);
     const encoded = Utilities.hsvTouint32(hueDeg / 360, 1, 1).toString();
 
     await lampChannel.setInputDatapoint(PairingIds.AL_SWITCH_ON_OFF, '1');
     await lampChannel.setInputDatapoint(PairingIds.AL_HSV, encoded);
 
-    console.log(`[StatusLamp] add=${addValue} sub=${subtractValue} net=${net} → Hue=${hueDeg}° encoded=${encoded}`);
+    console.log(`[StatusLamp] sum=${internalSum} → Hue=${hueDeg}° encoded=${encoded}`);
+}
+
+/** Add delta to sum, reset actuator display to 0. */
+async function handleAdd(delta: number, actor: DimActuatorChannel): Promise<void> {
+    if (delta <= 0) return;
+    internalSum += delta;
+    console.log(`[StatusLamp] +${delta} → sum=${internalSum}`);
+    actor.setValue(0);
+    await updateLamp();
+}
+
+/** Subtract delta from sum (floor at 0), reset actuator display to 0. */
+async function handleSubtract(delta: number, actor: DimActuatorChannel): Promise<void> {
+    if (delta <= 0) return;
+    internalSum = Math.max(0, internalSum - delta);
+    console.log(`[StatusLamp] -${delta} → sum=${internalSum}`);
+    actor.setValue(0);
+    await updateLamp();
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
-    // Addier-Aktor
     const dimAdd = await freeAtHome.createDimActuatorDevice('statuslamp-add', 'Status Addieren');
     dimAdd.setAutoKeepAlive(true);
     dimAdd.isAutoConfirm = true;
 
-    dimAdd.on('isOnChanged', async (isOn: boolean) => {
-        if (!isOn) { addValue = 0; await updateLamp(); }
-    });
     dimAdd.on('absoluteValueChanged', async (value: number) => {
-        addValue = value;
-        await updateLamp();
+        await handleAdd(value, dimAdd);
     });
 
-    // Subtrahier-Aktor
     const dimSub = await freeAtHome.createDimActuatorDevice('statuslamp-sub', 'Status Subtrahieren');
     dimSub.setAutoKeepAlive(true);
     dimSub.isAutoConfirm = true;
 
-    dimSub.on('isOnChanged', async (isOn: boolean) => {
-        if (!isOn) { subtractValue = 0; await updateLamp(); }
-    });
     dimSub.on('absoluteValueChanged', async (value: number) => {
-        subtractValue = value;
-        await updateLamp();
+        await handleSubtract(value, dimSub);
     });
 
     console.log('[StatusLamp] Addon started – waiting for configuration');
@@ -124,7 +126,7 @@ function parseColor(value: unknown, fallback: number): number {
 
 function parseThreshold(value: unknown, fallback: number): number {
     const n = Number(value);
-    return isFinite(n) ? Math.max(0, Math.min(100, n)) : fallback;
+    return isFinite(n) ? Math.max(0, n) : fallback; // no upper limit
 }
 
 addOn.on('configurationChanged', async (configuration: AddOn.Configuration) => {
@@ -145,9 +147,9 @@ addOn.on('configurationChanged', async (configuration: AddOn.Configuration) => {
     ];
 
     thresholds = [
-        parseThreshold(items['threshold1'], 25),
-        parseThreshold(items['threshold2'], 50),
-        parseThreshold(items['threshold3'], 75),
+        parseThreshold(items['threshold1'],  25),
+        parseThreshold(items['threshold2'],  50),
+        parseThreshold(items['threshold3'],  75),
     ];
 
     console.log(`[StatusLamp] Config: colors=${colors} thresholds=${thresholds}`);

@@ -24,24 +24,24 @@
                     ]
                 },
                 "threshold1": {
-                    "name": "Schwelle Zone 1→2 (0–100)",
+                    "name": "Schwelle Zone 1→2",
                     "type": "number",
                     "min": 0,
-                    "max": 100,
+                    "max": 9999,
                     "default": 25
                 },
                 "threshold2": {
-                    "name": "Schwelle Zone 2→3 (0–100)",
+                    "name": "Schwelle Zone 2→3",
                     "type": "number",
                     "min": 0,
-                    "max": 100,
+                    "max": 9999,
                     "default": 50
                 },
                 "threshold3": {
-                    "name": "Schwelle Zone 3→4 (0–100)",
+                    "name": "Schwelle Zone 3→4",
                     "type": "number",
                     "min": 0,
-                    "max": 100,
+                    "max": 9999,
                     "default": 75
                 },
                 "color1Hue": {
