@@ -20,6 +20,9 @@ let internalSum = 0;
 let colors: [number, number, number, number] = [120, 60, 30, 0];
 let thresholds: [number, number, number] = [25, 50, 75];
 
+// Serialises all updateLamp() calls so they never run concurrently
+let updateChain: Promise<void> = Promise.resolve();
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /** Returns the hue for the current internalSum based on configured zones. */
@@ -75,22 +78,35 @@ async function updateLamp(): Promise<void> {
     console.log(`[StatusLamp] sum=${internalSum} → Hue=${hueDeg}° encoded=${encoded}`);
 }
 
+function scheduleUpdate(): void {
+    updateChain = updateChain
+        .then(() => updateLamp())
+        .catch(err => console.error('[StatusLamp] updateLamp error:', err));
+}
+
 /** Add delta to sum, reset actuator display to 0. */
-async function handleAdd(delta: number, actor: DimActuatorChannel): Promise<void> {
+function handleAdd(delta: number, actor: DimActuatorChannel): void {
     if (delta <= 0) return;
     internalSum += delta;
     console.log(`[StatusLamp] +${delta} → sum=${internalSum}`);
     actor.setValue(0);
-    await updateLamp();
+    scheduleUpdate();
 }
 
 /** Subtract delta from sum (floor at 0), reset actuator display to 0. */
-async function handleSubtract(delta: number, actor: DimActuatorChannel): Promise<void> {
+function handleSubtract(delta: number, actor: DimActuatorChannel): void {
     if (delta <= 0) return;
     internalSum = Math.max(0, internalSum - delta);
     console.log(`[StatusLamp] -${delta} → sum=${internalSum}`);
     actor.setValue(0);
-    await updateLamp();
+    scheduleUpdate();
+}
+
+/** Reset sum to 0 (e.g. actuator switched off). */
+function handleReset(): void {
+    internalSum = 0;
+    console.log('[StatusLamp] Sum reset to 0');
+    scheduleUpdate();
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -100,17 +116,15 @@ async function main(): Promise<void> {
     dimAdd.setAutoKeepAlive(true);
     dimAdd.isAutoConfirm = true;
 
-    dimAdd.on('absoluteValueChanged', async (value: number) => {
-        await handleAdd(value, dimAdd);
-    });
+    dimAdd.on('isOnChanged', (isOn: boolean) => { if (!isOn) handleReset(); });
+    dimAdd.on('absoluteValueChanged', (value: number) => { handleAdd(value, dimAdd); });
 
     const dimSub = await freeAtHome.createDimActuatorDevice('statuslamp-sub', 'Status Subtrahieren');
     dimSub.setAutoKeepAlive(true);
     dimSub.isAutoConfirm = true;
 
-    dimSub.on('absoluteValueChanged', async (value: number) => {
-        await handleSubtract(value, dimSub);
-    });
+    dimSub.on('isOnChanged', (isOn: boolean) => { if (!isOn) handleReset(); });
+    dimSub.on('absoluteValueChanged', (value: number) => { handleSubtract(value, dimSub); });
 
     console.log('[StatusLamp] Addon started – waiting for configuration');
 }
@@ -153,7 +167,7 @@ addOn.on('configurationChanged', async (configuration: AddOn.Configuration) => {
     ];
 
     console.log(`[StatusLamp] Config: colors=${colors} thresholds=${thresholds}`);
-    await updateLamp();
+    scheduleUpdate();
 });
 
 addOn.connectToConfiguration();
