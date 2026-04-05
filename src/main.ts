@@ -1,4 +1,4 @@
-import { FreeAtHome, PairingIds, AddOn, Utilities } from '@busch-jaeger/free-at-home';
+import { FreeAtHome, PairingIds, AddOn, Utilities, ApiDevice, ApiChannel } from '@busch-jaeger/free-at-home';
 import { DimActuatorChannel } from '@busch-jaeger/free-at-home/lib/virtualChannels/dimActuatorChannel';
 
 const freeAtHome = new FreeAtHome();
@@ -12,6 +12,9 @@ const addOn = new AddOn.AddOn(metaData.id);
 // Parsed from config: "<serialNumber>/ch<hexNumber>"
 let lampSerial: string | undefined;
 let lampChannelNumber: number | undefined;
+
+// Resolved on first use (fetched fresh each config change)
+let lampChannel: ApiChannel | undefined;
 
 // Internal accumulator – unbounded, can exceed 100
 let internalSum = 0;
@@ -33,10 +36,26 @@ function sumToHueDegrees(sum: number): number {
     return colors[3];
 }
 
-/** Sends a single input datapoint directly to the real lamp via the low-level API. */
-async function sendDatapoint(pairingId: PairingIds, value: string): Promise<void> {
-    if (lampSerial === undefined || lampChannelNumber === undefined) return;
-    await freeAtHome.freeAtHomeApi.setInputDatapoint(lampSerial, lampChannelNumber, pairingId, value);
+/**
+ * Fetches the real device by serial directly from the API (bypasses the
+ * getAllDevices() early-exit cache), builds an ApiDevice/ApiChannel so we
+ * get the correct PairingId→datapoint-index mapping for that channel.
+ */
+async function resolveLampChannel(serial: string, channelNumber: number): Promise<ApiChannel | undefined> {
+    try {
+        const rawDevice = await freeAtHome.freeAtHomeApi.getDevice(serial);
+        const apiDevice = new ApiDevice(freeAtHome.freeAtHomeApi, rawDevice, serial);
+        for (const ch of apiDevice.getChannels()) {
+            if (ch.channelNumber === channelNumber) {
+                console.log(`[StatusLamp] Channel resolved: ${serial}/ch${channelNumber.toString(16).padStart(4, '0')}`);
+                return ch;
+            }
+        }
+        console.error(`[StatusLamp] Channel ${channelNumber} not found on device ${serial}`);
+    } catch (err) {
+        console.error(`[StatusLamp] Failed to resolve lamp channel: ${err}`);
+    }
+    return undefined;
 }
 
 async function updateLamp(): Promise<void> {
@@ -45,8 +64,13 @@ async function updateLamp(): Promise<void> {
         return;
     }
 
+    if (!lampChannel) {
+        lampChannel = await resolveLampChannel(lampSerial, lampChannelNumber);
+        if (!lampChannel) return;
+    }
+
     if (internalSum <= 0) {
-        await sendDatapoint(PairingIds.AL_SWITCH_ON_OFF, '0');
+        await lampChannel.setInputDatapoint(PairingIds.AL_SWITCH_ON_OFF, '0');
         console.log(`[StatusLamp] Lamp OFF (sum=${internalSum})`);
         return;
     }
@@ -54,8 +78,8 @@ async function updateLamp(): Promise<void> {
     const hueDeg  = sumToHueDegrees(internalSum);
     const encoded = Utilities.hsvTouint32(hueDeg / 360, 1, 1).toString();
 
-    await sendDatapoint(PairingIds.AL_SWITCH_ON_OFF, '1');
-    await sendDatapoint(PairingIds.AL_HSV, encoded);
+    await lampChannel.setInputDatapoint(PairingIds.AL_SWITCH_ON_OFF, '1');
+    await lampChannel.setInputDatapoint(PairingIds.AL_HSV, encoded);
 
     console.log(`[StatusLamp] sum=${internalSum} → Hue=${hueDeg}° encoded=${encoded}`);
 }
@@ -149,6 +173,7 @@ addOn.on('configurationChanged', (configuration: AddOn.Configuration) => {
         if (parsed) {
             lampSerial        = parsed.serial;
             lampChannelNumber = parsed.channelNumber;
+            lampChannel       = undefined; // force re-resolve with fresh device data
             console.log(`[StatusLamp] Target lamp → serial=${lampSerial} channel=${lampChannelNumber}`);
         }
     }
