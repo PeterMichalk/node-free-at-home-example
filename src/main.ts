@@ -1,5 +1,4 @@
 import { FreeAtHome, PairingIds, AddOn, Utilities } from '@busch-jaeger/free-at-home';
-import { ApiChannel } from '@busch-jaeger/free-at-home/lib/api/apiChannel';
 import { DimActuatorChannel } from '@busch-jaeger/free-at-home/lib/virtualChannels/dimActuatorChannel';
 
 const freeAtHome = new FreeAtHome();
@@ -10,8 +9,9 @@ const addOn = new AddOn.AddOn(metaData.id);
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
-let targetChannelRef: string | undefined;
-let lampChannel: ApiChannel | undefined;
+// Parsed from config: "<serialNumber>/ch<hexNumber>"
+let lampSerial: string | undefined;
+let lampChannelNumber: number | undefined;
 
 // Internal accumulator – unbounded, can exceed 100
 let internalSum = 0;
@@ -27,44 +27,26 @@ let updateChain: Promise<void> = Promise.resolve();
 
 /** Returns the hue for the current internalSum based on configured zones. */
 function sumToHueDegrees(sum: number): number {
-    if (sum <= 0)             return colors[0]; // handled separately (lamp off)
     if (sum < thresholds[0]) return colors[0];
     if (sum < thresholds[1]) return colors[1];
     if (sum < thresholds[2]) return colors[2];
     return colors[3];
 }
 
-async function resolveLampChannel(ref: string): Promise<ApiChannel | undefined> {
-    const parts = ref.split('/');
-    if (parts.length !== 2) {
-        console.error(`[StatusLamp] Invalid channel reference: "${ref}"`);
-        return undefined;
-    }
-    const [serial, channelStr] = parts;
-    const channelNumber = parseInt(channelStr.substring(2), 16); // "ch0001" → 1
-
-    const allChannels = await freeAtHome.getAllChannels();
-    for (const ch of allChannels) {
-        if (ch.serialNumber === serial && ch.channelNumber === channelNumber) {
-            return ch;
-        }
-    }
-    console.error(`[StatusLamp] Channel not found: ${ref}`);
-    return undefined;
+/** Sends a single input datapoint directly to the real lamp via the low-level API. */
+async function sendDatapoint(pairingId: PairingIds, value: string): Promise<void> {
+    if (lampSerial === undefined || lampChannelNumber === undefined) return;
+    await freeAtHome.freeAtHomeApi.setInputDatapoint(lampSerial, lampChannelNumber, pairingId, value);
 }
 
 async function updateLamp(): Promise<void> {
-    if (!lampChannel) {
-        if (!targetChannelRef) {
-            console.warn('[StatusLamp] No target lamp configured yet');
-            return;
-        }
-        lampChannel = await resolveLampChannel(targetChannelRef);
-        if (!lampChannel) return;
+    if (lampSerial === undefined || lampChannelNumber === undefined) {
+        console.warn('[StatusLamp] No target lamp configured yet');
+        return;
     }
 
     if (internalSum <= 0) {
-        await lampChannel.setInputDatapoint(PairingIds.AL_SWITCH_ON_OFF, '0');
+        await sendDatapoint(PairingIds.AL_SWITCH_ON_OFF, '0');
         console.log(`[StatusLamp] Lamp OFF (sum=${internalSum})`);
         return;
     }
@@ -72,8 +54,8 @@ async function updateLamp(): Promise<void> {
     const hueDeg  = sumToHueDegrees(internalSum);
     const encoded = Utilities.hsvTouint32(hueDeg / 360, 1, 1).toString();
 
-    await lampChannel.setInputDatapoint(PairingIds.AL_SWITCH_ON_OFF, '1');
-    await lampChannel.setInputDatapoint(PairingIds.AL_HSV, encoded);
+    await sendDatapoint(PairingIds.AL_SWITCH_ON_OFF, '1');
+    await sendDatapoint(PairingIds.AL_HSV, encoded);
 
     console.log(`[StatusLamp] sum=${internalSum} → Hue=${hueDeg}° encoded=${encoded}`);
 }
@@ -102,7 +84,7 @@ function handleSubtract(delta: number, actor: DimActuatorChannel): void {
     scheduleUpdate();
 }
 
-/** Reset sum to 0 (e.g. actuator switched off). */
+/** Reset sum to 0 when an actuator is switched off. */
 function handleReset(): void {
     internalSum = 0;
     console.log('[StatusLamp] Sum reset to 0');
@@ -140,17 +122,35 @@ function parseColor(value: unknown, fallback: number): number {
 
 function parseThreshold(value: unknown, fallback: number): number {
     const n = Number(value);
-    return isFinite(n) ? Math.max(0, n) : fallback; // no upper limit
+    return isFinite(n) ? Math.max(0, n) : fallback;
 }
 
-addOn.on('configurationChanged', async (configuration: AddOn.Configuration) => {
+/** Parses "<serialNumber>/ch<hexNumber>" into serial + channel number. */
+function parseLampRef(ref: string): { serial: string; channelNumber: number } | undefined {
+    const parts = ref.split('/');
+    if (parts.length !== 2 || !parts[1].startsWith('ch')) {
+        console.error(`[StatusLamp] Invalid channel reference: "${ref}"`);
+        return undefined;
+    }
+    const channelNumber = parseInt(parts[1].substring(2), 16);
+    if (isNaN(channelNumber)) {
+        console.error(`[StatusLamp] Cannot parse channel number from: "${ref}"`);
+        return undefined;
+    }
+    return { serial: parts[0], channelNumber };
+}
+
+addOn.on('configurationChanged', (configuration: AddOn.Configuration) => {
     const items = configuration['default']?.items ?? {};
 
     const newRef = typeof items['targetLamp'] === 'string' ? items['targetLamp'] : undefined;
-    if (newRef && newRef !== targetChannelRef) {
-        targetChannelRef = newRef;
-        lampChannel = undefined;
-        console.log(`[StatusLamp] Target lamp → ${targetChannelRef}`);
+    if (newRef) {
+        const parsed = parseLampRef(newRef);
+        if (parsed) {
+            lampSerial        = parsed.serial;
+            lampChannelNumber = parsed.channelNumber;
+            console.log(`[StatusLamp] Target lamp → serial=${lampSerial} channel=${lampChannelNumber}`);
+        }
     }
 
     colors = [
