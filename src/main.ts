@@ -44,8 +44,9 @@ async function poll(client: PowerfoxClient, deviceId: string): Promise<void> {
       `Powerfox | Leistung: ${data.Watt} W | Bezug gesamt: ${data.A_Plus} kWh | Einspeisung gesamt: ${data.A_Minus ?? 0} kWh`
     );
   } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
-    console.error(`Fehler beim Abruf der powerfox API: ${msg}`);
+    const err = error instanceof Error ? error : new Error(String(error));
+    const extra = (err as NodeJS.ErrnoException).code ? ` [code=${(err as NodeJS.ErrnoException).code}]` : '';
+    console.error(`[powerfox] Poll-Fehler: ${err.message}${extra}`);
   }
 }
 
@@ -66,8 +67,10 @@ async function startPolling(email: string, password: string, intervalSeconds: nu
     deviceId = await client.getDeviceId();
     console.log(`Powerfox Gerät gefunden: ${deviceId}`);
   } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
-    console.error(`Powerfox: Gerät-Erkennung fehlgeschlagen (${msg}). Bitte Zugangsdaten prüfen.`);
+    const err = error instanceof Error ? error : new Error(String(error));
+    const extra = (err as NodeJS.ErrnoException).code ? ` [code=${(err as NodeJS.ErrnoException).code}]` : '';
+    console.error(`[powerfox] Gerät-Erkennung fehlgeschlagen: ${err.message}${extra}`);
+    console.error('[powerfox] Bitte E-Mail und Passwort in der Addon-Konfiguration prüfen.');
     return;
   }
 
@@ -90,7 +93,7 @@ addOn.on('configurationChanged', (configuration: AddOn.Configuration) => {
       console.error('Fehler beim Starten des Pollings:', error);
     });
   } else {
-    console.log('Powerfox: E-Mail und Passwort noch nicht konfiguriert.');
+    console.log('[powerfox] E-Mail und/oder Passwort fehlen – Addon nicht gestartet.');
   }
 });
 

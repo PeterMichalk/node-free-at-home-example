@@ -36,31 +36,41 @@ export class PowerfoxClient {
   }
 
   private get<T>(path: string): Promise<T> {
+    const url = `${this.baseUrl}${path}`;
     return new Promise((resolve, reject) => {
-      const url = `${this.baseUrl}${path}`;
       const options = {
         headers: {
           Authorization: `Basic ${this.auth}`,
         },
       };
 
+      console.log(`[powerfox] --> GET ${url}`);
+
       https
         .get(url, options, (res) => {
           let data = '';
           res.on('data', (chunk: string) => (data += chunk));
           res.on('end', () => {
+            const body = data.trim();
+            console.log(`[powerfox] <-- ${res.statusCode} ${url} | Body: ${body.substring(0, 200)}`);
             if (res.statusCode === 200) {
               try {
-                resolve(JSON.parse(data) as T);
+                resolve(JSON.parse(body) as T);
               } catch {
-                reject(new Error(`Ungültige JSON-Antwort: ${data}`));
+                reject(new Error(`Ungültige JSON-Antwort: ${body}`));
               }
             } else {
-              reject(new Error(`HTTP ${res.statusCode}: ${data.trim()}`));
+              reject(new Error(`HTTP ${res.statusCode}: ${body}`));
             }
           });
         })
-        .on('error', reject);
+        .on('error', (err: NodeJS.ErrnoException) => {
+          console.error(
+            `[powerfox] Netzwerkfehler ${url} | ` +
+            `code=${err.code ?? '?'} syscall=${err.syscall ?? '?'} message=${err.message}`
+          );
+          reject(err);
+        });
     });
   }
 }
