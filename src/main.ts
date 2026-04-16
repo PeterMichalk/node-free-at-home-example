@@ -29,16 +29,25 @@ async function poll(client: PowerfoxClient, deviceId: string): Promise<void> {
 
     if (!meter) return;
 
-    await meter.setCurrentPowerConsumed(String(data.Watt));
-    await meter.setTotalEnergyImported(String(data.A_Plus));
-    await meter.setTotalEnergyExported(String(data.A_Minus ?? 0));
-
     // Convert kWh delta to Wh for today's values
     const importedTodayWh = (data.A_Plus - dailyBaseline.importKwh) * 1000;
     const exportedTodayWh = ((data.A_Minus ?? 0) - dailyBaseline.exportKwh) * 1000;
 
-    await meter.setImportedEnergyToday(String(Math.max(0, importedTodayWh)));
-    await meter.setExportedEnergyToday(String(Math.max(0, exportedTodayWh)));
+    const updates: Array<[string, () => Promise<void>]> = [
+      ['setCurrentPowerConsumed', () => meter!.setCurrentPowerConsumed(String(data.Watt))],
+      ['setTotalEnergyImported',  () => meter!.setTotalEnergyImported(String(data.A_Plus))],
+      ['setTotalEnergyExported',  () => meter!.setTotalEnergyExported(String(data.A_Minus ?? 0))],
+      ['setImportedEnergyToday',  () => meter!.setImportedEnergyToday(String(Math.max(0, importedTodayWh)))],
+      ['setExportedEnergyToday',  () => meter!.setExportedEnergyToday(String(Math.max(0, exportedTodayWh)))],
+    ];
+
+    for (const [name, fn] of updates) {
+      try {
+        await fn();
+      } catch {
+        console.warn(`[powerfox] Datenpunkt ${name} nicht unterstützt – übersprungen`);
+      }
+    }
 
     console.log(
       `Powerfox | Leistung: ${data.Watt} W | Bezug gesamt: ${data.A_Plus} kWh | Einspeisung gesamt: ${data.A_Minus ?? 0} kWh`

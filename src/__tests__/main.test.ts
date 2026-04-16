@@ -255,4 +255,17 @@ describe('main – polling & energy calculation', () => {
 
     expect(mockMeter.setCurrentPowerConsumed).not.toHaveBeenCalled();
   });
+
+  it('continues updating remaining datapoints when one setter rejects (unsupported datapoint)', async () => {
+    mockGetCurrentData.mockResolvedValue({ Watt: 500, Timestamp: 0, A_Plus: 100, A_Minus: 10 });
+    mockMeter.setTotalEnergyImported.mockRejectedValue(new Error('Request error: Forbidden'));
+    mockMeter.setTotalEnergyExported.mockRejectedValue(new Error('Request error: Forbidden'));
+
+    triggerConfigChanged({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
+    await flush();
+
+    expect(mockMeter.setCurrentPowerConsumed).toHaveBeenCalledWith('500');
+    expect(mockMeter.setImportedEnergyToday).toHaveBeenCalledWith('0');
+    expect(mockMeter.setExportedEnergyToday).toHaveBeenCalledWith('0');
+  });
 });
