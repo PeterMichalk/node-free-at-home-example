@@ -36,13 +36,13 @@ beforeEach(() => mockHttpsGet.mockReset());
 // ---------------------------------------------------------------------------
 
 describe('PowerfoxClient.getDeviceId()', () => {
-  it('returns the poweroptiId of the first device', async () => {
-    const devices = [{ poweroptiId: 'abc123def456', name: 'Haus', mode: 'main' }];
+  it('returns the DeviceId of the first device', async () => {
+    const devices = [{ DeviceId: '60007A47C6BE', AccountAssociatedSince: 0, MainDevice: true, Prosumer: false, Division: 0 }];
     mockResponse(200, JSON.stringify(devices));
 
     const id = await new PowerfoxClient('u@x.de', 'pw').getDeviceId();
 
-    expect(id).toBe('abc123def456');
+    expect(id).toBe('60007A47C6BE');
     expect(mockHttpsGet).toHaveBeenCalledWith(
       expect.stringContaining('/my/all/devices'),
       expect.anything(),
@@ -52,13 +52,13 @@ describe('PowerfoxClient.getDeviceId()', () => {
 
   it('returns the first device when multiple are registered', async () => {
     const devices = [
-      { poweroptiId: 'aaa111bbb222' },
-      { poweroptiId: 'ccc333ddd444' },
+      { DeviceId: 'AAA111BBB222', AccountAssociatedSince: 0, MainDevice: true, Prosumer: false, Division: 0 },
+      { DeviceId: 'CCC333DDD444', AccountAssociatedSince: 0, MainDevice: false, Prosumer: false, Division: 0 },
     ];
     mockResponse(200, JSON.stringify(devices));
 
     const id = await new PowerfoxClient('u@x.de', 'pw').getDeviceId();
-    expect(id).toBe('aaa111bbb222');
+    expect(id).toBe('AAA111BBB222');
   });
 
   it('rejects when no devices are found', async () => {
@@ -71,6 +71,13 @@ describe('PowerfoxClient.getDeviceId()', () => {
   it('rejects with HTTP 403 (wrong credentials)', async () => {
     mockResponse(403, 'Request error: Forbidden');
     await expect(new PowerfoxClient('u@x.de', 'wrong').getDeviceId()).rejects.toThrow('403');
+  });
+
+  it('rejects when device list is empty', async () => {
+    mockResponse(200, JSON.stringify([]));
+    await expect(new PowerfoxClient('u@x.de', 'pw').getDeviceId()).rejects.toThrow(
+      'Keine powerfox Geräte',
+    );
   });
 });
 

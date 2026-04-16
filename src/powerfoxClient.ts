@@ -10,9 +10,11 @@ export interface PowerfoxCurrentData {
 }
 
 export interface PowerfoxDevice {
-  poweroptiId: string;
-  name?: string;
-  mode?: string;
+  DeviceId: string;
+  AccountAssociatedSince: number;
+  MainDevice: boolean;
+  Prosumer: boolean;
+  Division: number;
 }
 
 export class PowerfoxClient {
@@ -24,36 +26,13 @@ export class PowerfoxClient {
   }
 
   async getDeviceId(): Promise<string> {
-    const devices = await this.get<unknown[]>('/my/all/devices');
+    const devices = await this.get<PowerfoxDevice[]>('/my/all/devices');
     if (!Array.isArray(devices) || devices.length === 0) {
       throw new Error('Keine powerfox Geräte im Account gefunden');
     }
-
-    const device = devices[0] as Record<string, unknown>;
-    console.log(`[powerfox] Erstes Gerät: ${JSON.stringify(device)}`);
-
-    // Try all known field name variants first
-    const knownFields = ['poweroptiId', 'powerOptiId', 'id', 'deviceId', 'serial', 'uid', 'mac', 'hardwareId'];
-    for (const field of knownFields) {
-      const val = device[field];
-      if (typeof val === 'string' && val.length > 0) {
-        console.log(`[powerfox] Geräte-ID (Feld "${field}"): ${val}`);
-        return val;
-      }
-    }
-
-    // Fallback: find any string field that looks like a 12-char hex device ID (e.g. 60007A47C6BE)
-    const hexId = /^[0-9A-Fa-f]{12}$/;
-    for (const [key, val] of Object.entries(device)) {
-      if (typeof val === 'string' && hexId.test(val)) {
-        console.log(`[powerfox] Geräte-ID (Feld "${key}" per Mustererkennung): ${val}`);
-        return val;
-      }
-    }
-
-    throw new Error(
-      `Kein Geräte-ID-Feld gefunden. Gerät: ${JSON.stringify(device)}`
-    );
+    const device = devices[0];
+    console.log(`[powerfox] Gerät: ${device.DeviceId} (Main=${device.MainDevice}, Prosumer=${device.Prosumer})`);
+    return device.DeviceId;
   }
 
   getCurrentData(deviceId: string): Promise<PowerfoxCurrentData> {
