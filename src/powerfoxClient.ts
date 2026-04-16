@@ -24,11 +24,22 @@ export class PowerfoxClient {
   }
 
   async getDeviceId(): Promise<string> {
-    const devices = await this.get<PowerfoxDevice[]>('/my/all/devices');
+    const devices = await this.get<unknown[]>('/my/all/devices');
     if (!Array.isArray(devices) || devices.length === 0) {
       throw new Error('Keine powerfox Geräte im Account gefunden');
     }
-    return devices[0].poweroptiId;
+
+    const device = devices[0] as Record<string, unknown>;
+    console.log(`[powerfox] Erstes Gerät: ${JSON.stringify(device)}`);
+
+    // Try known field names – log all keys if none matches
+    const id = device['poweroptiId'] ?? device['id'] ?? device['deviceId'] ?? device['serial'];
+    if (typeof id !== 'string' || !id) {
+      throw new Error(
+        `Kein Geräte-ID-Feld gefunden. Verfügbare Felder: ${Object.keys(device).join(', ')}`
+      );
+    }
+    return id;
   }
 
   getCurrentData(deviceId: string): Promise<PowerfoxCurrentData> {
