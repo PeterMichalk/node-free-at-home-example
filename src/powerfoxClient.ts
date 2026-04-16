@@ -9,6 +9,12 @@ export interface PowerfoxCurrentData {
   A_Plus_NT?: number;
 }
 
+export interface PowerfoxDevice {
+  poweroptiId: string;
+  name?: string;
+  mode?: string;
+}
+
 export class PowerfoxClient {
   private readonly baseUrl = 'https://backend.powerfox.energy/api/2.0';
   private readonly auth: string;
@@ -17,9 +23,21 @@ export class PowerfoxClient {
     this.auth = Buffer.from(`${email}:${password}`).toString('base64');
   }
 
-  getCurrentData(): Promise<PowerfoxCurrentData> {
+  async getDeviceId(): Promise<string> {
+    const devices = await this.get<PowerfoxDevice[]>('/my/all/devices');
+    if (!Array.isArray(devices) || devices.length === 0) {
+      throw new Error('Keine powerfox Geräte im Account gefunden');
+    }
+    return devices[0].poweroptiId;
+  }
+
+  getCurrentData(deviceId: string): Promise<PowerfoxCurrentData> {
+    return this.get<PowerfoxCurrentData>(`/my/${deviceId}/current?unit=kwh`);
+  }
+
+  private get<T>(path: string): Promise<T> {
     return new Promise((resolve, reject) => {
-      const url = `${this.baseUrl}/my/main/current?unit=kwh`;
+      const url = `${this.baseUrl}${path}`;
       const options = {
         headers: {
           Authorization: `Basic ${this.auth}`,
@@ -33,12 +51,12 @@ export class PowerfoxClient {
           res.on('end', () => {
             if (res.statusCode === 200) {
               try {
-                resolve(JSON.parse(data) as PowerfoxCurrentData);
+                resolve(JSON.parse(data) as T);
               } catch {
-                reject(new Error(`Failed to parse powerfox response: ${data}`));
+                reject(new Error(`Ungültige JSON-Antwort: ${data}`));
               }
             } else {
-              reject(new Error(`Powerfox API error HTTP ${res.statusCode}: ${data}`));
+              reject(new Error(`HTTP ${res.statusCode}: ${data.trim()}`));
             }
           });
         })

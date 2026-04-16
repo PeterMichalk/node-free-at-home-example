@@ -16,6 +16,7 @@ describe('main – polling & energy calculation', () => {
   };
   let mockCreateDevice: jest.Mock;
   let mockGetCurrentData: jest.Mock;
+  let mockGetDeviceId: jest.Mock;
   let triggerConfigChanged: (config: Partial<{ email: string; password: string; pollIntervalSeconds: number }>) => void;
 
   beforeEach(() => {
@@ -31,6 +32,7 @@ describe('main – polling & energy calculation', () => {
     };
     mockCreateDevice = jest.fn().mockResolvedValue(mockMeter);
     mockGetCurrentData = jest.fn();
+    mockGetDeviceId = jest.fn().mockResolvedValue('abc123def456');
 
     jest.doMock('@busch-jaeger/free-at-home', () => ({
       FreeAtHome: jest.fn(() => ({
@@ -52,7 +54,10 @@ describe('main – polling & energy calculation', () => {
     }));
 
     jest.doMock('../powerfoxClient', () => ({
-      PowerfoxClient: jest.fn(() => ({ getCurrentData: mockGetCurrentData })),
+      PowerfoxClient: jest.fn(() => ({
+        getDeviceId: mockGetDeviceId,
+        getCurrentData: mockGetCurrentData,
+      })),
     }));
 
     // Importing main.ts triggers module-level code and wires up listeners
@@ -67,6 +72,43 @@ describe('main – polling & energy calculation', () => {
   async function flush() {
     for (let i = 0; i < 10; i++) await Promise.resolve();
   }
+
+  // ---------------------------------------------------------------------------
+  // Device discovery
+  // ---------------------------------------------------------------------------
+
+  it('discovers the device ID via getDeviceId() before polling', async () => {
+    mockGetCurrentData.mockResolvedValue({ Watt: 0, Timestamp: 0, A_Plus: 0, A_Minus: 0 });
+
+    triggerConfigChanged({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
+    await flush();
+
+    expect(mockGetDeviceId).toHaveBeenCalledTimes(1);
+  });
+
+  it('polls using the discovered device ID', async () => {
+    mockGetDeviceId.mockResolvedValue('mymeter001');
+    mockGetCurrentData.mockResolvedValue({ Watt: 0, Timestamp: 0, A_Plus: 0, A_Minus: 0 });
+
+    triggerConfigChanged({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
+    await flush();
+
+    expect(mockGetCurrentData).toHaveBeenCalledWith('mymeter001');
+  });
+
+  it('stops and logs an error when device discovery fails (e.g. wrong credentials)', async () => {
+    mockGetDeviceId.mockRejectedValue(new Error('HTTP 403: Request error: Forbidden'));
+    const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    triggerConfigChanged({ email: 'u@x.de', password: 'wrong', pollIntervalSeconds: 30 });
+    await flush();
+
+    expect(mockGetCurrentData).not.toHaveBeenCalled();
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Gerät-Erkennung fehlgeschlagen'),
+    );
+    consoleSpy.mockRestore();
+  });
 
   // ---------------------------------------------------------------------------
   // Configuration handling
@@ -85,14 +127,14 @@ describe('main – polling & energy calculation', () => {
     triggerConfigChanged({ password: 'pw', pollIntervalSeconds: 30 });
     await flush();
 
-    expect(mockCreateDevice).not.toHaveBeenCalled();
+    expect(mockGetDeviceId).not.toHaveBeenCalled();
   });
 
   it('does not start polling when password is missing', async () => {
     triggerConfigChanged({ email: 'u@x.de', pollIntervalSeconds: 30 });
     await flush();
 
-    expect(mockCreateDevice).not.toHaveBeenCalled();
+    expect(mockGetDeviceId).not.toHaveBeenCalled();
   });
 
   // ---------------------------------------------------------------------------
@@ -176,8 +218,7 @@ describe('main – polling & energy calculation', () => {
     // Simulate day change
     getDate.mockReturnValue(16);
 
-    // Poll on the new day: A_Plus has grown by 2 kWh since yesterday, but
-    // the new baseline should be the current reading, so today = 0 Wh
+    // New baseline = current reading → today = 0 Wh
     mockGetCurrentData.mockResolvedValueOnce({ Watt: 0, Timestamp: 0, A_Plus: 102.0, A_Minus: 0 });
 
     jest.advanceTimersByTime(30_000);

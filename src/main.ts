@@ -14,9 +14,9 @@ let meter: EnergyTwoWayMeterV2Channel | undefined;
 // Daily baseline values to calculate "today" energy
 let dailyBaseline: { importKwh: number; exportKwh: number; day: number } | undefined;
 
-async function poll(client: PowerfoxClient): Promise<void> {
+async function poll(client: PowerfoxClient, deviceId: string): Promise<void> {
   try {
-    const data = await client.getCurrentData();
+    const data = await client.getCurrentData(deviceId);
 
     const today = new Date().getDate();
     if (!dailyBaseline || dailyBaseline.day !== today) {
@@ -44,7 +44,8 @@ async function poll(client: PowerfoxClient): Promise<void> {
       `Powerfox | Leistung: ${data.Watt} W | Bezug gesamt: ${data.A_Plus} kWh | Einspeisung gesamt: ${data.A_Minus ?? 0} kWh`
     );
   } catch (error) {
-    console.error('Fehler beim Abruf der powerfox API:', error);
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error(`Fehler beim Abruf der powerfox API: ${msg}`);
   }
 }
 
@@ -60,10 +61,20 @@ async function startPolling(email: string, password: string, intervalSeconds: nu
 
   const client = new PowerfoxClient(email, password);
 
-  await poll(client);
-  pollTimer = setInterval(() => poll(client), intervalSeconds * 1000);
+  let deviceId: string;
+  try {
+    deviceId = await client.getDeviceId();
+    console.log(`Powerfox Gerät gefunden: ${deviceId}`);
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error(`Powerfox: Gerät-Erkennung fehlgeschlagen (${msg}). Bitte Zugangsdaten prüfen.`);
+    return;
+  }
 
-  console.log(`Powerfox Polling gestartet (Intervall: ${intervalSeconds}s)`);
+  const doPoll = () => poll(client, deviceId);
+  await doPoll();
+  pollTimer = setInterval(doPoll, intervalSeconds * 1000);
+  console.log(`Powerfox Polling gestartet (Gerät: ${deviceId}, Intervall: ${intervalSeconds}s)`);
 }
 
 addOn.on('configurationChanged', (configuration: AddOn.Configuration) => {

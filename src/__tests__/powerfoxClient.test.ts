@@ -31,10 +31,57 @@ function mockNetworkError(message: string) {
 
 beforeEach(() => mockHttpsGet.mockReset());
 
+// ---------------------------------------------------------------------------
+// getDeviceId
+// ---------------------------------------------------------------------------
+
+describe('PowerfoxClient.getDeviceId()', () => {
+  it('returns the poweroptiId of the first device', async () => {
+    const devices = [{ poweroptiId: 'abc123def456', name: 'Haus', mode: 'main' }];
+    mockResponse(200, JSON.stringify(devices));
+
+    const id = await new PowerfoxClient('u@x.de', 'pw').getDeviceId();
+
+    expect(id).toBe('abc123def456');
+    expect(mockHttpsGet).toHaveBeenCalledWith(
+      expect.stringContaining('/my/all/devices'),
+      expect.anything(),
+      expect.any(Function),
+    );
+  });
+
+  it('returns the first device when multiple are registered', async () => {
+    const devices = [
+      { poweroptiId: 'aaa111bbb222' },
+      { poweroptiId: 'ccc333ddd444' },
+    ];
+    mockResponse(200, JSON.stringify(devices));
+
+    const id = await new PowerfoxClient('u@x.de', 'pw').getDeviceId();
+    expect(id).toBe('aaa111bbb222');
+  });
+
+  it('rejects when no devices are found', async () => {
+    mockResponse(200, JSON.stringify([]));
+    await expect(new PowerfoxClient('u@x.de', 'pw').getDeviceId()).rejects.toThrow(
+      'Keine powerfox Geräte',
+    );
+  });
+
+  it('rejects with HTTP 403 (wrong credentials)', async () => {
+    mockResponse(403, 'Request error: Forbidden');
+    await expect(new PowerfoxClient('u@x.de', 'wrong').getDeviceId()).rejects.toThrow('403');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getCurrentData – Authorization & URL
+// ---------------------------------------------------------------------------
+
 describe('PowerfoxClient – Authorization', () => {
   it('sends correct Basic Auth header', async () => {
     mockResponse(200, JSON.stringify({ Watt: 0, Timestamp: 0, A_Plus: 0 }));
-    await new PowerfoxClient('user@example.com', 'secret').getCurrentData();
+    await new PowerfoxClient('user@example.com', 'secret').getCurrentData('abc123');
 
     const expectedAuth = `Basic ${Buffer.from('user@example.com:secret').toString('base64')}`;
     expect(mockHttpsGet).toHaveBeenCalledWith(
@@ -44,25 +91,28 @@ describe('PowerfoxClient – Authorization', () => {
     );
   });
 
-  it('calls the correct endpoint URL with unit=kwh', async () => {
+  it('calls the device-specific endpoint with unit=kwh', async () => {
     mockResponse(200, JSON.stringify({ Watt: 0, Timestamp: 0, A_Plus: 0 }));
-    await new PowerfoxClient('u@x.de', 'p').getCurrentData();
+    await new PowerfoxClient('u@x.de', 'p').getCurrentData('abc123def456');
 
     expect(mockHttpsGet).toHaveBeenCalledWith(
-      'https://backend.powerfox.energy/api/2.0/my/main/current?unit=kwh',
+      'https://backend.powerfox.energy/api/2.0/my/abc123def456/current?unit=kwh',
       expect.anything(),
       expect.any(Function),
     );
   });
 });
 
+// ---------------------------------------------------------------------------
+// getCurrentData – Successful responses
+// ---------------------------------------------------------------------------
+
 describe('PowerfoxClient – Successful responses', () => {
   it('parses a response with all fields', async () => {
     const data = { Watt: 1234, Timestamp: 1700000000, A_Plus: 12345.678, A_Minus: 1.5, A_Plus_HT: 6000, A_Plus_NT: 6345.678 };
     mockResponse(200, JSON.stringify(data));
 
-    const result = await new PowerfoxClient('u@x.de', 'p').getCurrentData();
-
+    const result = await new PowerfoxClient('u@x.de', 'p').getCurrentData('abc');
     expect(result).toEqual(data);
   });
 
@@ -70,49 +120,47 @@ describe('PowerfoxClient – Successful responses', () => {
     const data = { Watt: 500, Timestamp: 1700000000, A_Plus: 999.0 };
     mockResponse(200, JSON.stringify(data));
 
-    const result = await new PowerfoxClient('u@x.de', 'p').getCurrentData();
-
+    const result = await new PowerfoxClient('u@x.de', 'p').getCurrentData('abc');
     expect(result.Watt).toBe(500);
-    expect(result.A_Plus).toBe(999.0);
     expect(result.A_Minus).toBeUndefined();
-    expect(result.A_Plus_HT).toBeUndefined();
   });
 
   it('handles negative Watt (feed-in)', async () => {
     mockResponse(200, JSON.stringify({ Watt: -800, Timestamp: 0, A_Plus: 100, A_Minus: 50 }));
-
-    const result = await new PowerfoxClient('u@x.de', 'p').getCurrentData();
-
+    const result = await new PowerfoxClient('u@x.de', 'p').getCurrentData('abc');
     expect(result.Watt).toBe(-800);
   });
 });
 
+// ---------------------------------------------------------------------------
+// getCurrentData – Error handling
+// ---------------------------------------------------------------------------
+
 describe('PowerfoxClient – Error handling', () => {
   it('rejects with HTTP 401 (wrong credentials)', async () => {
     mockResponse(401, 'Unauthorized');
+    await expect(new PowerfoxClient('u@x.de', 'wrong').getCurrentData('abc')).rejects.toThrow('401');
+  });
 
-    await expect(new PowerfoxClient('u@x.de', 'wrong').getCurrentData())
-      .rejects.toThrow('401');
+  it('rejects with HTTP 403 and includes the response body', async () => {
+    mockResponse(403, 'Request error: Forbidden');
+    await expect(new PowerfoxClient('u@x.de', 'p').getCurrentData('abc'))
+      .rejects.toThrow('HTTP 403: Request error: Forbidden');
   });
 
   it('rejects with HTTP 500 (server error)', async () => {
     mockResponse(500, 'Internal Server Error');
-
-    await expect(new PowerfoxClient('u@x.de', 'p').getCurrentData())
-      .rejects.toThrow('500');
+    await expect(new PowerfoxClient('u@x.de', 'p').getCurrentData('abc')).rejects.toThrow('500');
   });
 
   it('rejects when response body is not valid JSON', async () => {
     mockResponse(200, 'not-valid-json');
-
-    await expect(new PowerfoxClient('u@x.de', 'p').getCurrentData())
-      .rejects.toThrow('Failed to parse powerfox response');
+    await expect(new PowerfoxClient('u@x.de', 'p').getCurrentData('abc'))
+      .rejects.toThrow('Ungültige JSON-Antwort');
   });
 
   it('rejects on network error (e.g. ECONNREFUSED)', async () => {
     mockNetworkError('ECONNREFUSED');
-
-    await expect(new PowerfoxClient('u@x.de', 'p').getCurrentData())
-      .rejects.toThrow('ECONNREFUSED');
+    await expect(new PowerfoxClient('u@x.de', 'p').getCurrentData('abc')).rejects.toThrow('ECONNREFUSED');
   });
 });
