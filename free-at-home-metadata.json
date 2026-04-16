@@ -8,6 +8,10 @@
   "author": "free@home powerfox integration",
   "type": "app",
   "entryPoint": "build/main.js",
+  "accessControl": {
+      "networkAccess": true,
+      "networkPorts": [443]
+  },
   "parameters": {
       "default": {
           "name": "Einstellungen",
