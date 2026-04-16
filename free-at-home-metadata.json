@@ -1,34 +1,31 @@
 {
-  "name": "Example for free@home addons",
+  "name": "Powerfox Stromzähler für free@home",
   "version": "1.0.0",
-  "id": "de.busch-jaeger.freeathome.example",
+  "id": "de.busch-jaeger.freeathome.powerfox",
   "license": "MIT",
-  "description": "Example for free@home addons",
-  "url": "https://www.busch-jaeger.de",
-  "author": "Busch Jaeger",
+  "description": "Bindet den powerfox Poweropti Stromzähler über die powerfox Kunden-API in free@home ein.",
+  "url": "https://powerfox.energy",
+  "author": "free@home powerfox integration",
   "type": "app",
   "entryPoint": "build/main.js",
   "parameters": {
       "default": {
-          "name": "Settings",
+          "name": "Einstellungen",
           "items": {
-              "username": {
-                  "name": "Username",
+              "email": {
+                  "name": "powerfox E-Mail",
                   "type": "string"
               },
-              "apiKey": {
-                  "name": "API Key",
-                  "type": "string"
+              "password": {
+                  "name": "powerfox Passwort",
+                  "type": "password"
               },
-              "ignoreReachability": {
-                  "name": "Ignore reachability",
-                  "type": "boolean"
-              },
-              "port": {
-                  "name": "Port",
+              "pollIntervalSeconds": {
+                  "name": "Abfrageintervall (Sekunden)",
                   "type": "number",
-                  "min": 1024,
-                  "max": 65535
+                  "min": 10,
+                  "max": 3600,
+                  "default": 30
               }
           }
       }
