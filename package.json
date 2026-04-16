@@ -1,7 +1,7 @@
 {
-  "name": "free-at-home-example",
+  "name": "free-at-home-powerfox",
   "version": "1.0.0",
-  "description": "",
+  "description": "Powerfox Poweropti Stromzähler Integration für Busch-Jaeger free@home",
   "main": "main.js",
   "scripts": {
     "start": "node build/main.js",
