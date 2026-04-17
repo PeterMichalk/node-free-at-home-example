@@ -12,8 +12,8 @@ let pollTimer: ReturnType<typeof setInterval> | undefined;
 let meter: EnergyTwoWayMeterV2Channel | undefined;
 let isStartingUp = false;
 
-// Daily baseline values to calculate "today" energy
-let dailyBaseline: { importKwh: number; exportKwh: number; day: number } | undefined;
+// Daily baseline to calculate exported energy today
+let dailyBaseline: { exportKwh: number; day: number } | undefined;
 
 async function poll(client: PowerfoxClient, deviceId: string): Promise<void> {
   try {
@@ -21,22 +21,15 @@ async function poll(client: PowerfoxClient, deviceId: string): Promise<void> {
 
     const today = new Date().getDate();
     if (!dailyBaseline || dailyBaseline.day !== today) {
-      dailyBaseline = {
-        importKwh: data.A_Plus,
-        exportKwh: data.A_Minus ?? 0,
-        day: today,
-      };
+      dailyBaseline = { exportKwh: data.A_Minus ?? 0, day: today };
     }
 
     if (!meter) return;
 
-    // Convert kWh delta to Wh for today's values
-    const importedTodayWh = (data.A_Plus - dailyBaseline.importKwh) * 1000;
     const exportedTodayWh = ((data.A_Minus ?? 0) - dailyBaseline.exportKwh) * 1000;
 
     const updates: Array<[string, () => Promise<void>]> = [
       ['setCurrentPowerConsumed', () => meter!.setCurrentPowerConsumed(String(data.Watt))],
-      ['setImportedEnergyToday',  () => meter!.setImportedEnergyToday(String(Math.max(0, importedTodayWh)))],
       ['setExportedEnergyToday',  () => meter!.setExportedEnergyToday(String(Math.max(0, exportedTodayWh)))],
     ];
 
