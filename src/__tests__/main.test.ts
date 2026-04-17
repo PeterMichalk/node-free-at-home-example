@@ -10,6 +10,7 @@ describe('main – polling & energy calculation', () => {
   let mockMeter: {
     setCurrentPowerConsumed: jest.Mock;
     setExportedEnergyToday: jest.Mock;
+    setAutoKeepAlive: jest.Mock;
   };
   let mockCreateDevice: jest.Mock;
   let mockGetCurrentData: jest.Mock;
@@ -23,6 +24,7 @@ describe('main – polling & energy calculation', () => {
     mockMeter = {
       setCurrentPowerConsumed: jest.fn().mockResolvedValue(undefined),
       setExportedEnergyToday: jest.fn().mockResolvedValue(undefined),
+      setAutoKeepAlive: jest.fn(),
     };
     mockCreateDevice = jest.fn().mockResolvedValue(mockMeter);
     mockGetCurrentData = jest.fn();
@@ -114,6 +116,18 @@ describe('main – polling & energy calculation', () => {
   });
 
   // ---------------------------------------------------------------------------
+  // Keepalive
+  // ---------------------------------------------------------------------------
+
+  it('enables auto-keepalive on the meter channel after creation', async () => {
+    mockGetCurrentData.mockResolvedValue({ Watt: 0, Timestamp: 0, A_Plus: 0, A_Minus: 0 });
+
+    await start({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
+
+    expect(mockMeter.setAutoKeepAlive).toHaveBeenCalledWith(true);
+  });
+
+  // ---------------------------------------------------------------------------
   // Startup guard
   // ---------------------------------------------------------------------------
 
@@ -129,6 +143,27 @@ describe('main – polling & energy calculation', () => {
 
     // Device must be created exactly once despite two events
     expect(mockCreateDevice).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps existing polling running when getDeviceId fails on reconfiguration', async () => {
+    mockGetCurrentData.mockResolvedValue({ Watt: 42, Timestamp: 0, A_Plus: 0, A_Minus: 0 });
+
+    // First startup succeeds
+    await start({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
+    const callsAfterStart = mockGetCurrentData.mock.calls.length;
+
+    // Reconfiguration with broken API – getDeviceId fails
+    mockGetDeviceId.mockRejectedValueOnce(new Error('HTTP 403'));
+    const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    triggerConfigChanged({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
+    await flush();
+    consoleSpy.mockRestore();
+
+    // Old interval timer must still be running
+    jest.advanceTimersByTime(30_000);
+    await flush();
+
+    expect(mockGetCurrentData.mock.calls.length).toBeGreaterThan(callsAfterStart);
   });
 
   // ---------------------------------------------------------------------------
