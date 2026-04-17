@@ -69,6 +69,17 @@ describe('main – polling & energy calculation', () => {
     for (let i = 0; i < 10; i++) await Promise.resolve();
   }
 
+  /**
+   * Trigger config, let setup (device creation + device ID discovery) complete,
+   * then advance past the 3 s startup delay so the first poll runs.
+   */
+  async function start(config: Partial<{ email: string; password: string; pollIntervalSeconds: number }>) {
+    triggerConfigChanged(config);
+    await flush();                   // device creation + getDeviceId
+    jest.advanceTimersByTime(3000);  // fire delayed first poll
+    await flush();                   // let first poll complete
+  }
+
   // ---------------------------------------------------------------------------
   // Device discovery
   // ---------------------------------------------------------------------------
@@ -76,8 +87,7 @@ describe('main – polling & energy calculation', () => {
   it('discovers the device ID via getDeviceId() before polling', async () => {
     mockGetCurrentData.mockResolvedValue({ Watt: 0, Timestamp: 0, A_Plus: 0, A_Minus: 0 });
 
-    triggerConfigChanged({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
-    await flush();
+    await start({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
 
     expect(mockGetDeviceId).toHaveBeenCalledTimes(1);
   });
@@ -86,8 +96,7 @@ describe('main – polling & energy calculation', () => {
     mockGetDeviceId.mockResolvedValue('mymeter001');
     mockGetCurrentData.mockResolvedValue({ Watt: 0, Timestamp: 0, A_Plus: 0, A_Minus: 0 });
 
-    triggerConfigChanged({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
-    await flush();
+    await start({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
 
     expect(mockGetCurrentData).toHaveBeenCalledWith('mymeter001');
   });
@@ -107,14 +116,31 @@ describe('main – polling & energy calculation', () => {
   });
 
   // ---------------------------------------------------------------------------
+  // Startup guard
+  // ---------------------------------------------------------------------------
+
+  it('ignores a second configurationChanged that arrives during startup', async () => {
+    mockGetCurrentData.mockResolvedValue({ Watt: 0, Timestamp: 0, A_Plus: 0, A_Minus: 0 });
+
+    // Fire configurationChanged twice before setup has finished
+    triggerConfigChanged({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
+    triggerConfigChanged({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
+    await flush();
+    jest.advanceTimersByTime(3000);
+    await flush();
+
+    // Device must be created exactly once despite two events
+    expect(mockCreateDevice).toHaveBeenCalledTimes(1);
+  });
+
+  // ---------------------------------------------------------------------------
   // Configuration handling
   // ---------------------------------------------------------------------------
 
   it('creates the energy meter device when credentials are provided', async () => {
     mockGetCurrentData.mockResolvedValue({ Watt: 0, Timestamp: 0, A_Plus: 0, A_Minus: 0 });
 
-    triggerConfigChanged({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
-    await flush();
+    await start({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
 
     expect(mockCreateDevice).toHaveBeenCalledWith('powerfox-main', 'Powerfox Stromzähler');
   });
@@ -140,8 +166,7 @@ describe('main – polling & energy calculation', () => {
   it('passes current power (Watt) to the meter', async () => {
     mockGetCurrentData.mockResolvedValue({ Watt: 1337, Timestamp: 0, A_Plus: 50, A_Minus: 0 });
 
-    triggerConfigChanged({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
-    await flush();
+    await start({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
 
     expect(mockMeter.setCurrentPowerConsumed).toHaveBeenCalledWith('1337');
   });
@@ -154,8 +179,7 @@ describe('main – polling & energy calculation', () => {
     // Poll 1 – establishes daily baseline
     mockGetCurrentData.mockResolvedValueOnce({ Watt: 0, Timestamp: 0, A_Plus: 100.0, A_Minus: 10.0 });
 
-    triggerConfigChanged({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
-    await flush();
+    await start({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
 
     // Poll 2 – +0.5 kWh imported, +0.25 kWh exported (use binary fractions to avoid float drift)
     mockGetCurrentData.mockResolvedValueOnce({ Watt: 0, Timestamp: 0, A_Plus: 100.5, A_Minus: 10.25 });
@@ -171,8 +195,7 @@ describe('main – polling & energy calculation', () => {
     // Poll 1 – baseline with high value
     mockGetCurrentData.mockResolvedValueOnce({ Watt: 0, Timestamp: 0, A_Plus: 9999.0, A_Minus: 0 });
 
-    triggerConfigChanged({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
-    await flush();
+    await start({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
 
     // Poll 2 – A_Plus lower than baseline (meter was reset)
     mockGetCurrentData.mockResolvedValueOnce({ Watt: 0, Timestamp: 0, A_Plus: 1.0, A_Minus: 0 });
@@ -189,8 +212,7 @@ describe('main – polling & energy calculation', () => {
 
     mockGetCurrentData.mockResolvedValueOnce({ Watt: 0, Timestamp: 0, A_Plus: 100.0, A_Minus: 0 });
 
-    triggerConfigChanged({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
-    await flush();
+    await start({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
 
     // Simulate day change
     getDate.mockReturnValue(16);
@@ -213,22 +235,20 @@ describe('main – polling & energy calculation', () => {
   it('uses 30 s as default when pollIntervalSeconds is not set', async () => {
     mockGetCurrentData.mockResolvedValue({ Watt: 0, Timestamp: 0, A_Plus: 0, A_Minus: 0 });
 
-    triggerConfigChanged({ email: 'u@x.de', password: 'pw' }); // no interval
-    await flush();
+    await start({ email: 'u@x.de', password: 'pw' }); // no interval
 
-    const callsAfterInit = mockGetCurrentData.mock.calls.length;
+    const callsAfterFirstPoll = mockGetCurrentData.mock.calls.length;
 
     jest.advanceTimersByTime(30_000);
     await flush();
 
-    expect(mockGetCurrentData.mock.calls.length).toBe(callsAfterInit + 1);
+    expect(mockGetCurrentData.mock.calls.length).toBe(callsAfterFirstPoll + 1);
   });
 
   it('does not call meter methods when the API returns an error', async () => {
     mockGetCurrentData.mockRejectedValue(new Error('Network error'));
 
-    triggerConfigChanged({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
-    await flush();
+    await start({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
 
     expect(mockMeter.setCurrentPowerConsumed).not.toHaveBeenCalled();
   });
@@ -237,8 +257,7 @@ describe('main – polling & energy calculation', () => {
     mockGetCurrentData.mockResolvedValue({ Watt: 500, Timestamp: 0, A_Plus: 100, A_Minus: 10 });
     mockMeter.setCurrentPowerConsumed.mockRejectedValue(new Error('Request error: Forbidden'));
 
-    triggerConfigChanged({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
-    await flush();
+    await start({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
 
     expect(mockMeter.setCurrentPowerConsumed).toHaveBeenCalledWith('500');
     expect(mockMeter.setImportedEnergyToday).toHaveBeenCalledWith('0');

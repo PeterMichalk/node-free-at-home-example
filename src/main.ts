@@ -10,6 +10,7 @@ const addOn = new AddOn.AddOn(metaData.id);
 
 let pollTimer: ReturnType<typeof setInterval> | undefined;
 let meter: EnergyTwoWayMeterV2Channel | undefined;
+let isStartingUp = false;
 
 // Daily baseline values to calculate "today" energy
 let dailyBaseline: { importKwh: number; exportKwh: number; day: number } | undefined;
@@ -58,33 +59,41 @@ async function poll(client: PowerfoxClient, deviceId: string): Promise<void> {
 }
 
 async function startPolling(email: string, password: string, intervalSeconds: number): Promise<void> {
-  if (pollTimer) {
-    clearInterval(pollTimer);
-    pollTimer = undefined;
-  }
+  if (isStartingUp) return;
+  isStartingUp = true;
 
-  if (!meter) {
-    meter = await freeAtHome.createEnergyTwoWayMeterV2Device('powerfox-main', 'Powerfox Stromzähler');
-  }
-
-  const client = new PowerfoxClient(email, password);
-
-  let deviceId: string;
   try {
-    deviceId = await client.getDeviceId();
-    console.log(`Powerfox Gerät gefunden: ${deviceId}`);
-  } catch (error) {
-    const err = error instanceof Error ? error : new Error(String(error));
-    const extra = (err as NodeJS.ErrnoException).code ? ` [code=${(err as NodeJS.ErrnoException).code}]` : '';
-    console.error(`[powerfox] Gerät-Erkennung fehlgeschlagen: ${err.message}${extra}`);
-    console.error('[powerfox] Bitte E-Mail und Passwort in der Addon-Konfiguration prüfen.');
-    return;
-  }
+    if (pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = undefined;
+    }
 
-  const doPoll = () => poll(client, deviceId);
-  await doPoll();
-  pollTimer = setInterval(doPoll, intervalSeconds * 1000);
-  console.log(`Powerfox Polling gestartet (Gerät: ${deviceId}, Intervall: ${intervalSeconds}s)`);
+    if (!meter) {
+      meter = await freeAtHome.createEnergyTwoWayMeterV2Device('powerfox-main', 'Powerfox Stromzähler');
+    }
+
+    const client = new PowerfoxClient(email, password);
+
+    let deviceId: string;
+    try {
+      deviceId = await client.getDeviceId();
+      console.log(`Powerfox Gerät gefunden: ${deviceId}`);
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      const extra = (err as NodeJS.ErrnoException).code ? ` [code=${(err as NodeJS.ErrnoException).code}]` : '';
+      console.error(`[powerfox] Gerät-Erkennung fehlgeschlagen: ${err.message}${extra}`);
+      console.error('[powerfox] Bitte E-Mail und Passwort in der Addon-Konfiguration prüfen.');
+      return;
+    }
+
+    const doPoll = () => poll(client, deviceId);
+    pollTimer = setInterval(doPoll, intervalSeconds * 1000);
+    console.log(`Powerfox Polling gestartet (Gerät: ${deviceId}, Intervall: ${intervalSeconds}s)`);
+    // Delay first poll so the SysAP has time to register the virtual channel
+    setTimeout(doPoll, 3000);
+  } finally {
+    isStartingUp = false;
+  }
 }
 
 addOn.on('configurationChanged', (configuration: AddOn.Configuration) => {
