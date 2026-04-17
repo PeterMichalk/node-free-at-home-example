@@ -1,4 +1,4 @@
-import { FreeAtHome, AddOn } from '@busch-jaeger/free-at-home';
+import { FreeAtHome, AddOn, PairingIds } from '@busch-jaeger/free-at-home';
 import { EnergyTwoWayMeterV2Channel } from '@busch-jaeger/free-at-home/lib/virtualChannels/energyTwoWayMeterV2Channel';
 import { PowerfoxClient } from './powerfoxClient';
 
@@ -10,6 +10,8 @@ const addOn = new AddOn.AddOn(metaData.id);
 
 let pollTimer: ReturnType<typeof setInterval> | undefined;
 let meter: EnergyTwoWayMeterV2Channel | undefined;
+let supportsTotalEnergyImported = true;
+let supportsTotalEnergyExported = true;
 
 // Daily baseline values to calculate "today" energy
 let dailyBaseline: { importKwh: number; exportKwh: number; day: number } | undefined;
@@ -35,8 +37,8 @@ async function poll(client: PowerfoxClient, deviceId: string): Promise<void> {
 
     const updates: Array<[string, () => Promise<void>]> = [
       ['setCurrentPowerConsumed', () => meter!.setCurrentPowerConsumed(String(data.Watt))],
-      ['setTotalEnergyImported',  () => meter!.setTotalEnergyImported(String(data.A_Plus))],
-      ['setTotalEnergyExported',  () => meter!.setTotalEnergyExported(String(data.A_Minus ?? 0))],
+      ...(supportsTotalEnergyImported ? [['setTotalEnergyImported', () => meter!.setTotalEnergyImported(String(data.A_Plus))] as [string, () => Promise<void>]] : []),
+      ...(supportsTotalEnergyExported ? [['setTotalEnergyExported', () => meter!.setTotalEnergyExported(String(data.A_Minus ?? 0))] as [string, () => Promise<void>]] : []),
       ['setImportedEnergyToday',  () => meter!.setImportedEnergyToday(String(Math.max(0, importedTodayWh)))],
       ['setExportedEnergyToday',  () => meter!.setExportedEnergyToday(String(Math.max(0, exportedTodayWh)))],
     ];
@@ -44,8 +46,8 @@ async function poll(client: PowerfoxClient, deviceId: string): Promise<void> {
     for (const [name, fn] of updates) {
       try {
         await fn();
-      } catch {
-        console.warn(`[powerfox] Datenpunkt ${name} nicht unterstützt – übersprungen`);
+      } catch (e) {
+        console.error(`[powerfox] Datenpunkt ${name} fehlgeschlagen (übersprungen): ${e}`);
       }
     }
 
@@ -67,6 +69,14 @@ async function startPolling(email: string, password: string, intervalSeconds: nu
 
   if (!meter) {
     meter = await freeAtHome.createEnergyTwoWayMeterV2Device('powerfox-main', 'Powerfox Stromzähler');
+    const pairingMap: Map<number, number> = (meter as any).channel?.outputPairingToPosition;
+    if (pairingMap) {
+      supportsTotalEnergyImported = pairingMap.has(PairingIds.AL_MEASURED_TOTAL_ENERGY_IMPORTED);
+      supportsTotalEnergyExported = pairingMap.has(PairingIds.AL_MEASURED_TOTAL_ENERGY_EXPORTED);
+      console.log(`[powerfox] Pairing-Map gelesen: 1224=${supportsTotalEnergyImported}, 1225=${supportsTotalEnergyExported}`);
+    } else {
+      console.log('[powerfox] Pairing-Map nicht zugänglich – 1224/1225 werden versucht');
+    }
   }
 
   const client = new PowerfoxClient(email, password);

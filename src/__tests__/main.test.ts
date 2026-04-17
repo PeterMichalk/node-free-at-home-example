@@ -17,6 +17,7 @@ describe('main – polling & energy calculation', () => {
   let mockCreateDevice: jest.Mock;
   let mockGetCurrentData: jest.Mock;
   let mockGetDeviceId: jest.Mock;
+  let mockPairingMap: Map<number, number>;
   let triggerConfigChanged: (config: Partial<{ email: string; password: string; pollIntervalSeconds: number }>) => void;
 
   beforeEach(() => {
@@ -33,6 +34,10 @@ describe('main – polling & energy calculation', () => {
     mockCreateDevice = jest.fn().mockResolvedValue(mockMeter);
     mockGetCurrentData = jest.fn();
     mockGetDeviceId = jest.fn().mockResolvedValue('abc123def456');
+
+    // Default: 1224/1225 absent (matches real SysAP behaviour); tests that need them add entries
+    mockPairingMap = new Map<number, number>();
+    (mockMeter as any).channel = { outputPairingToPosition: mockPairingMap };
 
     jest.doMock('@busch-jaeger/free-at-home', () => ({
       FreeAtHome: jest.fn(() => ({
@@ -51,6 +56,7 @@ describe('main – polling & energy calculation', () => {
           connectToConfiguration: jest.fn(),
         })),
       },
+      PairingIds: { AL_MEASURED_TOTAL_ENERGY_IMPORTED: 1224, AL_MEASURED_TOTAL_ENERGY_EXPORTED: 1225 },
     }));
 
     jest.doMock('../powerfoxClient', () => ({
@@ -150,7 +156,9 @@ describe('main – polling & energy calculation', () => {
     expect(mockMeter.setCurrentPowerConsumed).toHaveBeenCalledWith('1337');
   });
 
-  it('passes total import and export energy to the meter', async () => {
+  it('passes total import and export energy to the meter when firmware supports it', async () => {
+    mockPairingMap.set(1224, 0);
+    mockPairingMap.set(1225, 1);
     mockGetCurrentData.mockResolvedValue({ Watt: 0, Timestamp: 0, A_Plus: 1500.5, A_Minus: 200.25 });
 
     triggerConfigChanged({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
@@ -160,7 +168,19 @@ describe('main – polling & energy calculation', () => {
     expect(mockMeter.setTotalEnergyExported).toHaveBeenCalledWith('200.25');
   });
 
-  it('uses 0 for export when A_Minus is absent (one-way meter)', async () => {
+  it('skips total energy setters when firmware does not support them (1224/1225 absent)', async () => {
+    mockGetCurrentData.mockResolvedValue({ Watt: 0, Timestamp: 0, A_Plus: 100 });
+
+    triggerConfigChanged({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
+    await flush();
+
+    expect(mockMeter.setTotalEnergyImported).not.toHaveBeenCalled();
+    expect(mockMeter.setTotalEnergyExported).not.toHaveBeenCalled();
+  });
+
+  it('uses 0 for export when A_Minus is absent (one-way meter), firmware supports 1224/1225', async () => {
+    mockPairingMap.set(1224, 0);
+    mockPairingMap.set(1225, 1);
     mockGetCurrentData.mockResolvedValue({ Watt: 0, Timestamp: 0, A_Plus: 100 });
 
     triggerConfigChanged({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
@@ -256,7 +276,9 @@ describe('main – polling & energy calculation', () => {
     expect(mockMeter.setCurrentPowerConsumed).not.toHaveBeenCalled();
   });
 
-  it('continues updating remaining datapoints when one setter rejects (unsupported datapoint)', async () => {
+  it('continues updating remaining datapoints when one setter rejects (transient error)', async () => {
+    mockPairingMap.set(1224, 0);
+    mockPairingMap.set(1225, 1);
     mockGetCurrentData.mockResolvedValue({ Watt: 500, Timestamp: 0, A_Plus: 100, A_Minus: 10 });
     mockMeter.setTotalEnergyImported.mockRejectedValue(new Error('Request error: Forbidden'));
     mockMeter.setTotalEnergyExported.mockRejectedValue(new Error('Request error: Forbidden'));
