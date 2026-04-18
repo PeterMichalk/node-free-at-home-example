@@ -59,8 +59,9 @@ async function poll(client: PowerfoxClient, deviceId: string): Promise<void> {
       consecutivePollErrors = 0;
     }
 
+    const outdatedNote = data.Outdated ? ' [Outdated]' : '';
     console.log(
-      `Powerfox | Leistung: ${data.Watt} W | Bezug gesamt: ${data.A_Plus} kWh | Einspeisung gesamt: ${data.A_Minus ?? 0} kWh`
+      `Powerfox | Leistung: ${data.Watt} W | Bezug gesamt: ${data.A_Plus} kWh | Einspeisung gesamt: ${data.A_Minus ?? 0} kWh${outdatedNote}`
     );
   } catch (error) {
     consecutivePollErrors++;
