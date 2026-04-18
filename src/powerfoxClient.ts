@@ -7,6 +7,7 @@ export interface PowerfoxCurrentData {
   A_Minus?: number;
   A_Plus_HT?: number;
   A_Plus_NT?: number;
+  Outdated?: boolean;
 }
 
 export interface PowerfoxDevice {

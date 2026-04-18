@@ -2,7 +2,7 @@ import { FreeAtHome, AddOn } from '@busch-jaeger/free-at-home';
 import { EnergyTwoWayMeterV2Channel } from '@busch-jaeger/free-at-home/lib/virtualChannels/energyTwoWayMeterV2Channel';
 import { PowerfoxClient } from './powerfoxClient';
 
-const VERSION = '1.3.0';
+const VERSION = '1.4.0';
 
 const freeAtHome = new FreeAtHome();
 freeAtHome.activateSignalHandling();
@@ -14,28 +14,38 @@ let pollTimer: ReturnType<typeof setInterval> | undefined;
 let meter: EnergyTwoWayMeterV2Channel | undefined;
 let isStartingUp = false;
 
-// Daily baseline to calculate exported energy today
-let dailyBaseline: { exportKwh: number; day: number } | undefined;
+type Baseline = { exportKwh: number; importKwh: number; day: number };
+let dailyBaseline: Baseline | undefined;
 
 let consecutivePollErrors = 0;
 
-async function poll(client: PowerfoxClient, deviceId: string): Promise<void> {
+function saveBaseline(b: Baseline): void {
+  addOn.setApplicationState({ default: { items: { baseline: b } } })
+    .catch(e => console.error(`[powerfox] Baseline speichern fehlgeschlagen: ${e}`));
+}
+
+async function poll(client: PowerfoxClient, deviceId: string, prosumerMode: boolean): Promise<void> {
   try {
     const data = await client.getCurrentData(deviceId);
 
     const today = new Date().getDate();
     if (!dailyBaseline || dailyBaseline.day !== today) {
-      dailyBaseline = { exportKwh: data.A_Minus ?? 0, day: today };
+      dailyBaseline = { exportKwh: data.A_Minus ?? 0, importKwh: data.A_Plus, day: today };
+      saveBaseline(dailyBaseline);
     }
 
     if (!meter) return;
 
     const exportedTodayWh = ((data.A_Minus ?? 0) - dailyBaseline.exportKwh) * 1000;
 
-    const updates: Array<[string, () => Promise<void>]> = [
-      ['setCurrentPowerConsumed', () => meter!.setCurrentPowerConsumed(String(data.Watt))],
-      ['setExportedEnergyToday',  () => meter!.setExportedEnergyToday(String(Math.max(0, exportedTodayWh)))],
-    ];
+    const updates: Array<[string, () => Promise<void>]> = [];
+    if (prosumerMode) {
+      updates.push(['setCurrentPowerConsumed', () => meter!.setCurrentPowerConsumed(String(Math.max(0, data.Watt)))]);
+      updates.push(['setCurrentExcessPower',   () => meter!.setCurrentExcessPower(String(Math.max(0, -data.Watt)))]);
+    } else {
+      updates.push(['setCurrentPowerConsumed', () => meter!.setCurrentPowerConsumed(String(data.Watt))]);
+    }
+    updates.push(['setExportedEnergyToday', () => meter!.setExportedEnergyToday(String(Math.max(0, exportedTodayWh)))]);
 
     let anySetterFailed = false;
     for (const [name, fn] of updates) {
@@ -74,7 +84,7 @@ async function poll(client: PowerfoxClient, deviceId: string): Promise<void> {
   }
 }
 
-async function startPolling(email: string, password: string, intervalSeconds: number): Promise<void> {
+async function startPolling(email: string, password: string, intervalSeconds: number, prosumerMode: boolean): Promise<void> {
   if (isStartingUp) return;
   isStartingUp = true;
 
@@ -106,9 +116,9 @@ async function startPolling(email: string, password: string, intervalSeconds: nu
     }
     consecutivePollErrors = 0;
 
-    const doPoll = () => poll(client, deviceId);
+    const doPoll = () => poll(client, deviceId, prosumerMode);
     pollTimer = setInterval(doPoll, intervalSeconds * 1000);
-    console.log(`Powerfox Polling gestartet (Gerät: ${deviceId}, Intervall: ${intervalSeconds}s)`);
+    console.log(`Powerfox Polling gestartet (Gerät: ${deviceId}, Intervall: ${intervalSeconds}s, Prosumer: ${prosumerMode})`);
     // Delay first poll so the SysAP has time to register the virtual channel
     setTimeout(doPoll, 3000);
   } finally {
@@ -118,6 +128,14 @@ async function startPolling(email: string, password: string, intervalSeconds: nu
 
 console.log(`[powerfox] Addon gestartet (v${VERSION})`);
 
+addOn.on('applicationStateChanged', (state: AddOn.Configuration) => {
+  const saved = state['default']?.items?.['baseline'] as Baseline | undefined;
+  if (saved && typeof saved.day === 'number' && saved.day === new Date().getDate()) {
+    dailyBaseline = saved;
+    console.log(`[powerfox] Baseline geladen: Tag ${saved.day}, Export ${saved.exportKwh} kWh, Bezug ${saved.importKwh} kWh`);
+  }
+});
+
 addOn.on('configurationChanged', (configuration: AddOn.Configuration) => {
   const items = configuration['default']?.items;
   if (!items) return;
@@ -125,11 +143,12 @@ addOn.on('configurationChanged', (configuration: AddOn.Configuration) => {
   const email = items['email'] as string | undefined;
   const password = items['password'] as string | undefined;
   const pollIntervalSeconds = Number(items['pollIntervalSeconds']) || 30;
+  const prosumerMode = items['prosumerMode'] === true;
 
-  console.log(`[powerfox] Konfiguration empfangen (Intervall: ${pollIntervalSeconds}s)`);
+  console.log(`[powerfox] Konfiguration empfangen (Intervall: ${pollIntervalSeconds}s, Prosumer: ${prosumerMode})`);
 
   if (email && password) {
-    startPolling(email, password, pollIntervalSeconds).catch((error) => {
+    startPolling(email, password, pollIntervalSeconds, prosumerMode).catch((error) => {
       console.error('Fehler beim Starten des Pollings:', error);
     });
   } else {
@@ -137,4 +156,5 @@ addOn.on('configurationChanged', (configuration: AddOn.Configuration) => {
   }
 });
 
+addOn.connectToApplicationState();
 addOn.connectToConfiguration();
