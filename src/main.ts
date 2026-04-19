@@ -36,6 +36,7 @@ async function poll(client: PowerfoxClient, deviceId: string, prosumerMode: bool
 
     if (!meter) return;
 
+    const importedTodayWh = (data.A_Plus - dailyBaseline.importKwh) * 1000;
     const exportedTodayWh = ((data.A_Minus ?? 0) - dailyBaseline.exportKwh) * 1000;
 
     const updates: Array<[string, () => Promise<void>]> = [];
@@ -45,6 +46,7 @@ async function poll(client: PowerfoxClient, deviceId: string, prosumerMode: bool
     } else {
       updates.push(['setCurrentPowerConsumed', () => meter!.setCurrentPowerConsumed(String(data.Watt))]);
     }
+    updates.push(['setImportedEnergyToday', () => meter!.setImportedEnergyToday(String(Math.max(0, importedTodayWh)))]);
     updates.push(['setExportedEnergyToday', () => meter!.setExportedEnergyToday(String(Math.max(0, exportedTodayWh)))]);
 
     let anySetterFailed = false;
