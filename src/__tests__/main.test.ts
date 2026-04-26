@@ -26,8 +26,6 @@ describe('main – polling & energy calculation', () => {
     mockMeter = {
       setCurrentPowerConsumed: jest.fn().mockResolvedValue(undefined),
       setCurrentExcessPower: jest.fn().mockResolvedValue(undefined),
-      setTotalEnergyImported: jest.fn().mockResolvedValue(undefined),
-      setTotalEnergyExported: jest.fn().mockResolvedValue(undefined),
       setAutoKeepAlive: jest.fn(),
     };
     mockCreateDevice = jest.fn().mockResolvedValue(mockMeter);
@@ -241,34 +239,6 @@ describe('main – polling & energy calculation', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // Total energy (cumulative meter readings → pairing 1224/1225)
-  // ---------------------------------------------------------------------------
-
-  it('passes A_Plus directly to setTotalEnergyImported in kWh', async () => {
-    mockGetCurrentData.mockResolvedValue({ Watt: 0, Timestamp: 0, A_Plus: 19414.53, A_Minus: 12364.07 });
-
-    await start({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
-
-    expect(mockMeter.setTotalEnergyImported).toHaveBeenCalledWith('19414.53');
-  });
-
-  it('passes A_Minus directly to setTotalEnergyExported in kWh', async () => {
-    mockGetCurrentData.mockResolvedValue({ Watt: 0, Timestamp: 0, A_Plus: 19414.53, A_Minus: 12364.07 });
-
-    await start({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
-
-    expect(mockMeter.setTotalEnergyExported).toHaveBeenCalledWith('12364.07');
-  });
-
-  it('uses 0 for setTotalEnergyExported when A_Minus is absent (one-way meter)', async () => {
-    mockGetCurrentData.mockResolvedValue({ Watt: 100, Timestamp: 0, A_Plus: 500.0 });
-
-    await start({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
-
-    expect(mockMeter.setTotalEnergyExported).toHaveBeenCalledWith('0');
-  });
-
-  // ---------------------------------------------------------------------------
   // Error handling
   // ---------------------------------------------------------------------------
 
@@ -280,24 +250,14 @@ describe('main – polling & energy calculation', () => {
     expect(mockMeter.setCurrentPowerConsumed).not.toHaveBeenCalled();
   });
 
-  it('continues updating remaining datapoints when one setter rejects (transient error)', async () => {
-    mockGetCurrentData.mockResolvedValue({ Watt: 500, Timestamp: 0, A_Plus: 100, A_Minus: 10 });
+  it('continues updating when setCurrentExcessPower rejects (transient error)', async () => {
+    mockGetCurrentData.mockResolvedValue({ Watt: -500, Timestamp: 0, A_Plus: 100, A_Minus: 10 });
     mockMeter.setCurrentPowerConsumed.mockRejectedValue(new Error('Request error: Forbidden'));
 
-    await start({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
+    await start({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30, prosumerMode: true });
 
-    expect(mockMeter.setCurrentPowerConsumed).toHaveBeenCalledWith('500');
-    expect(mockMeter.setTotalEnergyExported).toHaveBeenCalledWith('10');
-  });
-
-  it('continues updating when setTotalEnergyImported rejects (e.g. 403 on older firmware)', async () => {
-    mockGetCurrentData.mockResolvedValue({ Watt: 100, Timestamp: 0, A_Plus: 200, A_Minus: 10 });
-    mockMeter.setTotalEnergyImported.mockRejectedValue(new Error('Request error: Forbidden'));
-
-    await start({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
-
-    expect(mockMeter.setTotalEnergyImported).toHaveBeenCalled();
-    expect(mockMeter.setTotalEnergyExported).toHaveBeenCalled();
+    expect(mockMeter.setCurrentPowerConsumed).toHaveBeenCalledWith('0');
+    expect(mockMeter.setCurrentExcessPower).toHaveBeenCalledWith('500');
   });
 
   // ---------------------------------------------------------------------------

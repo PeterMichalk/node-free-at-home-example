@@ -29,8 +29,6 @@ async function poll(client: PowerfoxClient, deviceId: string, prosumerMode: bool
     } else {
       updates.push(['setCurrentPowerConsumed', () => meter!.setCurrentPowerConsumed(String(data.Watt))]);
     }
-    updates.push(['setTotalEnergyImported', () => meter!.setTotalEnergyImported(String(data.A_Plus))]);
-    updates.push(['setTotalEnergyExported', () => meter!.setTotalEnergyExported(String(data.A_Minus ?? 0))]);
 
     let anySetterFailed = false;
     for (const [name, fn] of updates) {
