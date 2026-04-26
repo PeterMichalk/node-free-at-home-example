@@ -177,13 +177,13 @@ describe('PowerfoxClient – Error handling', () => {
 // ---------------------------------------------------------------------------
 
 describe('PowerfoxClient.getReport()', () => {
-  it('calls the correct URL with zero-padded month and day', async () => {
+  it('calls the correct URL with zero-padded month and day as query parameters', async () => {
     mockResponse(200, JSON.stringify([]));
     const date = new Date(2026, 3, 5); // April 5 2026 (month is 0-indexed)
     await new PowerfoxClient('u@x.de', 'p').getReport('abc123', date);
 
     expect(mockHttpsGet).toHaveBeenCalledWith(
-      'https://backend.powerfox.energy/api/2.0/my/abc123/report/2026/04/05?unit=kwh',
+      'https://backend.powerfox.energy/api/2.0/my/abc123/report?year=2026&month=04&day=05&unit=kwh',
       expect.anything(),
       expect.any(Function),
     );
