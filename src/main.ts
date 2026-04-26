@@ -18,14 +18,7 @@ let consecutivePollErrors = 0;
 
 async function poll(client: PowerfoxClient, deviceId: string, prosumerMode: boolean): Promise<void> {
   try {
-    const now = new Date();
-    const [data, report] = await Promise.all([
-      client.getCurrentData(deviceId),
-      client.getReport(deviceId, now),
-    ]);
-
-    const importedTodayWh = report.reduce((sum, e) => sum + e.A_Plus, 0) * 1000;
-    const exportedTodayWh = report.reduce((sum, e) => sum + (e.A_Minus ?? 0), 0) * 1000;
+    const data = await client.getCurrentData(deviceId);
 
     if (!meter) return;
 
@@ -36,8 +29,8 @@ async function poll(client: PowerfoxClient, deviceId: string, prosumerMode: bool
     } else {
       updates.push(['setCurrentPowerConsumed', () => meter!.setCurrentPowerConsumed(String(data.Watt))]);
     }
-    updates.push(['setImportedEnergyToday', () => meter!.setImportedEnergyToday(String(Math.max(0, importedTodayWh)))]);
-    updates.push(['setExportedEnergyToday', () => meter!.setExportedEnergyToday(String(Math.max(0, exportedTodayWh)))]);
+    updates.push(['setTotalEnergyImported', () => meter!.setTotalEnergyImported(String(data.A_Plus))]);
+    updates.push(['setTotalEnergyExported', () => meter!.setTotalEnergyExported(String(data.A_Minus ?? 0))]);
 
     let anySetterFailed = false;
     for (const [name, fn] of updates) {
@@ -63,7 +56,7 @@ async function poll(client: PowerfoxClient, deviceId: string, prosumerMode: bool
 
     const outdatedNote = data.Outdated ? ' [Outdated]' : '';
     console.log(
-      `Powerfox | Leistung: ${data.Watt} W | Bezug heute: ${(importedTodayWh / 1000).toFixed(3)} kWh | Einspeisung heute: ${(exportedTodayWh / 1000).toFixed(3)} kWh${outdatedNote}`
+      `Powerfox | Leistung: ${data.Watt} W | Bezug gesamt: ${data.A_Plus} kWh | Einspeisung gesamt: ${data.A_Minus ?? 0} kWh${outdatedNote}`
     );
   } catch (error) {
     consecutivePollErrors++;
