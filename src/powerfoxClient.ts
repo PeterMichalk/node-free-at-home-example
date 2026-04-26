@@ -10,6 +10,14 @@ export interface PowerfoxCurrentData {
   Outdated?: boolean;
 }
 
+export interface PowerfoxReportEntry {
+  Timestamp: number;
+  A_Plus: number;
+  A_Minus?: number;
+  A_Plus_HT?: number;
+  A_Plus_NT?: number;
+}
+
 export interface PowerfoxDevice {
   DeviceId: string;
   AccountAssociatedSince: number;
@@ -38,6 +46,13 @@ export class PowerfoxClient {
 
   getCurrentData(deviceId: string): Promise<PowerfoxCurrentData> {
     return this.get<PowerfoxCurrentData>(`/my/${deviceId}/current?unit=kwh`);
+  }
+
+  getReport(deviceId: string, date: Date): Promise<PowerfoxReportEntry[]> {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return this.get<PowerfoxReportEntry[]>(`/my/${deviceId}/report/${y}/${m}/${d}?unit=kwh`);
   }
 
   private get<T>(path: string): Promise<T> {

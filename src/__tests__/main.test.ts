@@ -16,10 +16,9 @@ describe('main – polling & energy calculation', () => {
   };
   let mockCreateDevice: jest.Mock;
   let mockGetCurrentData: jest.Mock;
+  let mockGetReport: jest.Mock;
   let mockGetDeviceId: jest.Mock;
-  let mockSetApplicationState: jest.Mock;
   let triggerConfigChanged: (config: Partial<{ email: string; password: string; pollIntervalSeconds: number; prosumerMode: boolean }>) => void;
-  let triggerAppStateChanged: (state: any) => void;
 
   beforeEach(() => {
     jest.useFakeTimers({ doNotFake: ['nextTick'] });
@@ -34,8 +33,8 @@ describe('main – polling & energy calculation', () => {
     };
     mockCreateDevice = jest.fn().mockResolvedValue(mockMeter);
     mockGetCurrentData = jest.fn();
+    mockGetReport = jest.fn().mockResolvedValue([]);
     mockGetDeviceId = jest.fn().mockResolvedValue('abc123def456');
-    mockSetApplicationState = jest.fn().mockResolvedValue(undefined);
 
     jest.doMock('@busch-jaeger/free-at-home', () => ({
       FreeAtHome: jest.fn(() => ({
@@ -50,13 +49,8 @@ describe('main – polling & energy calculation', () => {
               triggerConfigChanged = (items) =>
                 listener({ default: { items } });
             }
-            if (event === 'applicationStateChanged') {
-              triggerAppStateChanged = (state) => listener(state);
-            }
           }),
           connectToConfiguration: jest.fn(),
-          connectToApplicationState: jest.fn(),
-          setApplicationState: mockSetApplicationState,
         })),
       },
     }));
@@ -65,6 +59,7 @@ describe('main – polling & energy calculation', () => {
       PowerfoxClient: jest.fn(() => ({
         getDeviceId: mockGetDeviceId,
         getCurrentData: mockGetCurrentData,
+        getReport: mockGetReport,
       })),
     }));
 
@@ -111,6 +106,7 @@ describe('main – polling & energy calculation', () => {
     await start({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
 
     expect(mockGetCurrentData).toHaveBeenCalledWith('mymeter001');
+    expect(mockGetReport).toHaveBeenCalledWith('mymeter001', expect.any(Date));
   });
 
   it('stops and logs an error when device discovery fails (e.g. wrong credentials)', async () => {
@@ -249,164 +245,114 @@ describe('main – polling & energy calculation', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // Exported-energy-today calculation
+  // Energy today from Report API
   // ---------------------------------------------------------------------------
 
-  it('calculates exported energy today in Wh from kWh delta between polls', async () => {
-    // Poll 1 – establishes daily baseline
-    mockGetCurrentData.mockResolvedValueOnce({ Watt: 0, Timestamp: 0, A_Plus: 100.0, A_Minus: 10.0 });
+  it('sums hourly report entries to calculate imported energy today in Wh', async () => {
+    mockGetCurrentData.mockResolvedValue({ Watt: 0, Timestamp: 0, A_Plus: 0, A_Minus: 0 });
+    mockGetReport.mockResolvedValue([
+      { Timestamp: 0, A_Plus: 0.5, A_Minus: 0 },
+      { Timestamp: 1, A_Plus: 0.3, A_Minus: 0 },
+      { Timestamp: 2, A_Plus: 0.2, A_Minus: 0 },
+    ]);
 
     await start({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
 
-    // Poll 2 – +0.25 kWh exported (use binary fraction to avoid float drift)
-    mockGetCurrentData.mockResolvedValueOnce({ Watt: 0, Timestamp: 0, A_Plus: 100.5, A_Minus: 10.25 });
-
-    jest.advanceTimersByTime(30_000);
-    await flush();
-
-    expect(mockMeter.setExportedEnergyToday).toHaveBeenLastCalledWith('250');   // 0.25 × 1000
+    // (0.5 + 0.3 + 0.2) × 1000 = 1000 Wh
+    expect(mockMeter.setImportedEnergyToday).toHaveBeenCalledWith('1000');
   });
 
-  it('clamps exported energy today to 0 when A_Minus drops (e.g. after meter reset)', async () => {
-    // Poll 1 – baseline with non-zero export value
-    mockGetCurrentData.mockResolvedValueOnce({ Watt: 0, Timestamp: 0, A_Plus: 0, A_Minus: 500.0 });
+  it('sums hourly report entries to calculate exported energy today in Wh', async () => {
+    mockGetCurrentData.mockResolvedValue({ Watt: 0, Timestamp: 0, A_Plus: 0, A_Minus: 0 });
+    mockGetReport.mockResolvedValue([
+      { Timestamp: 0, A_Plus: 0, A_Minus: 10.0 },
+      { Timestamp: 1, A_Plus: 0, A_Minus: 25.5 },
+      { Timestamp: 2, A_Plus: 0, A_Minus: 43.89 },
+    ]);
 
     await start({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
 
-    // Poll 2 – A_Minus lower than baseline
-    mockGetCurrentData.mockResolvedValueOnce({ Watt: 0, Timestamp: 0, A_Plus: 0, A_Minus: 1.0 });
-
-    jest.advanceTimersByTime(30_000);
-    await flush();
-
-    expect(mockMeter.setExportedEnergyToday).toHaveBeenLastCalledWith('0');
+    // (10.0 + 25.5 + 43.89) × 1000 = 79390 Wh
+    expect(mockMeter.setExportedEnergyToday).toHaveBeenCalledWith('79390');
   });
 
-  it('uses 0 for export when A_Minus is absent', async () => {
-    mockGetCurrentData.mockResolvedValueOnce({ Watt: 0, Timestamp: 0, A_Plus: 100 });
+  it('treats missing A_Minus in report entry as 0', async () => {
+    mockGetCurrentData.mockResolvedValue({ Watt: 0, Timestamp: 0, A_Plus: 0 });
+    mockGetReport.mockResolvedValue([
+      { Timestamp: 0, A_Plus: 1.0 },
+      { Timestamp: 1, A_Plus: 0.5 },
+    ]);
 
     await start({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
 
-    mockGetCurrentData.mockResolvedValueOnce({ Watt: 0, Timestamp: 0, A_Plus: 101 });
+    expect(mockMeter.setExportedEnergyToday).toHaveBeenCalledWith('0');
+    expect(mockMeter.setImportedEnergyToday).toHaveBeenCalledWith('1500');
+  });
 
+  it('reports 0 Wh when report is empty', async () => {
+    mockGetCurrentData.mockResolvedValue({ Watt: 100, Timestamp: 0, A_Plus: 0, A_Minus: 0 });
+    mockGetReport.mockResolvedValue([]);
+
+    await start({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
+
+    expect(mockMeter.setImportedEnergyToday).toHaveBeenCalledWith('0');
+    expect(mockMeter.setExportedEnergyToday).toHaveBeenCalledWith('0');
+  });
+
+  it('still sets Watt when report API fails', async () => {
+    mockGetCurrentData.mockResolvedValue({ Watt: 500, Timestamp: 0, A_Plus: 0, A_Minus: 0 });
+    mockGetReport.mockRejectedValue(new Error('Network error'));
+    const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    await start({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
+
+    // Poll fails entirely (Promise.all rejects) – no meter updates
+    expect(mockMeter.setCurrentPowerConsumed).not.toHaveBeenCalled();
+    consoleSpy.mockRestore();
+  });
+
+  it('fetches report for today on each poll', async () => {
+    mockGetCurrentData.mockResolvedValue({ Watt: 0, Timestamp: 0, A_Plus: 0, A_Minus: 0 });
+
+    await start({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
     jest.advanceTimersByTime(30_000);
     await flush();
 
-    expect(mockMeter.setExportedEnergyToday).toHaveBeenLastCalledWith('0');
+    expect(mockGetReport).toHaveBeenCalledTimes(2);
   });
 
   // ---------------------------------------------------------------------------
-  // Imported-energy-today calculation
+  // Error handling
   // ---------------------------------------------------------------------------
 
-  it('calculates imported energy today in Wh from A_Plus delta between polls', async () => {
-    // Poll 1 – establishes daily baseline
-    mockGetCurrentData.mockResolvedValueOnce({ Watt: 0, Timestamp: 0, A_Plus: 200.0, A_Minus: 0 });
+  it('does not call meter methods when the API returns an error', async () => {
+    mockGetCurrentData.mockRejectedValue(new Error('Network error'));
 
     await start({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
 
-    // Poll 2 – +0.5 kWh imported
-    mockGetCurrentData.mockResolvedValueOnce({ Watt: 0, Timestamp: 0, A_Plus: 200.5, A_Minus: 0 });
-
-    jest.advanceTimersByTime(30_000);
-    await flush();
-
-    expect(mockMeter.setImportedEnergyToday).toHaveBeenLastCalledWith('500');   // 0.5 × 1000
+    expect(mockMeter.setCurrentPowerConsumed).not.toHaveBeenCalled();
   });
 
-  it('clamps imported energy today to 0 when A_Plus drops (e.g. after meter reset)', async () => {
-    mockGetCurrentData.mockResolvedValueOnce({ Watt: 0, Timestamp: 0, A_Plus: 500.0, A_Minus: 0 });
+  it('continues updating remaining datapoints when one setter rejects (transient error)', async () => {
+    mockGetCurrentData.mockResolvedValue({ Watt: 500, Timestamp: 0, A_Plus: 100, A_Minus: 10 });
+    mockGetReport.mockResolvedValue([{ Timestamp: 0, A_Plus: 0.1, A_Minus: 0 }]);
+    mockMeter.setCurrentPowerConsumed.mockRejectedValue(new Error('Request error: Forbidden'));
 
     await start({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
 
-    mockGetCurrentData.mockResolvedValueOnce({ Watt: 0, Timestamp: 0, A_Plus: 1.0, A_Minus: 0 });
-
-    jest.advanceTimersByTime(30_000);
-    await flush();
-
-    expect(mockMeter.setImportedEnergyToday).toHaveBeenLastCalledWith('0');
+    expect(mockMeter.setCurrentPowerConsumed).toHaveBeenCalledWith('500');
+    expect(mockMeter.setExportedEnergyToday).toHaveBeenCalledWith('0');
   });
 
   it('continues updating when setImportedEnergyToday rejects (e.g. 403 on older firmware)', async () => {
     mockGetCurrentData.mockResolvedValue({ Watt: 100, Timestamp: 0, A_Plus: 200, A_Minus: 10 });
+    mockGetReport.mockResolvedValue([{ Timestamp: 0, A_Plus: 0.2, A_Minus: 0.05 }]);
     mockMeter.setImportedEnergyToday.mockRejectedValue(new Error('Request error: Forbidden'));
 
     await start({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
 
     expect(mockMeter.setImportedEnergyToday).toHaveBeenCalled();
     expect(mockMeter.setExportedEnergyToday).toHaveBeenCalled();
-  });
-
-  // ---------------------------------------------------------------------------
-  // Baseline persistence
-  // ---------------------------------------------------------------------------
-
-  it('saves baseline to application state when initialising on a new day', async () => {
-    mockGetCurrentData.mockResolvedValue({ Watt: 0, Timestamp: 0, A_Plus: 100, A_Minus: 10 });
-
-    await start({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
-
-    expect(mockSetApplicationState).toHaveBeenCalledWith(
-      expect.objectContaining({
-        default: expect.objectContaining({
-          items: expect.objectContaining({
-            baseline: expect.objectContaining({ exportKwh: 10, importKwh: 100 }),
-          }),
-        }),
-      })
-    );
-  });
-
-  it('saves updated baseline to application state at midnight', async () => {
-    const getDate = jest.spyOn(Date.prototype, 'getDate').mockReturnValue(15);
-    mockGetCurrentData.mockResolvedValueOnce({ Watt: 0, Timestamp: 0, A_Plus: 100, A_Minus: 10 });
-
-    await start({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
-
-    getDate.mockReturnValue(16);
-    mockGetCurrentData.mockResolvedValueOnce({ Watt: 0, Timestamp: 0, A_Plus: 102, A_Minus: 10.5 });
-
-    jest.advanceTimersByTime(30_000);
-    await flush();
-
-    expect(mockSetApplicationState).toHaveBeenLastCalledWith({
-      default: { items: { baseline: { exportKwh: 10.5, importKwh: 102, day: 16 } } },
-    });
-
-    getDate.mockRestore();
-  });
-
-  it('restores baseline from saved application state for the current day', async () => {
-    const getDate = jest.spyOn(Date.prototype, 'getDate').mockReturnValue(15);
-
-    // Application state fires before config (simulates addon startup sequence)
-    triggerAppStateChanged({ default: { items: { baseline: { exportKwh: 50.0, importKwh: 200.0, day: 15 } } } });
-
-    mockGetCurrentData.mockResolvedValueOnce({ Watt: 0, Timestamp: 0, A_Plus: 210, A_Minus: 50.25 });
-
-    await start({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
-
-    // exportedTodayWh = (50.25 - 50.0) * 1000 = 250 Wh
-    expect(mockMeter.setExportedEnergyToday).toHaveBeenLastCalledWith('250');
-
-    getDate.mockRestore();
-  });
-
-  it('ignores saved baseline from a previous day', async () => {
-    const getDate = jest.spyOn(Date.prototype, 'getDate').mockReturnValue(16);
-
-    // Saved baseline is from day 15 – should be ignored
-    triggerAppStateChanged({ default: { items: { baseline: { exportKwh: 50.0, importKwh: 200.0, day: 15 } } } });
-
-    // Current reading becomes the new baseline
-    mockGetCurrentData.mockResolvedValueOnce({ Watt: 0, Timestamp: 0, A_Plus: 210, A_Minus: 55.0 });
-
-    await start({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
-
-    // exportedTodayWh = (55.0 - 55.0) * 1000 = 0 (current reading IS the baseline)
-    expect(mockMeter.setExportedEnergyToday).toHaveBeenLastCalledWith('0');
-
-    getDate.mockRestore();
   });
 
   // ---------------------------------------------------------------------------
@@ -424,48 +370,5 @@ describe('main – polling & energy calculation', () => {
     await flush();
 
     expect(mockGetCurrentData.mock.calls.length).toBe(callsAfterFirstPoll + 1);
-  });
-
-  it('does not call meter methods when the API returns an error', async () => {
-    mockGetCurrentData.mockRejectedValue(new Error('Network error'));
-
-    await start({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
-
-    expect(mockMeter.setCurrentPowerConsumed).not.toHaveBeenCalled();
-  });
-
-  it('continues updating remaining datapoints when one setter rejects (transient error)', async () => {
-    mockGetCurrentData.mockResolvedValue({ Watt: 500, Timestamp: 0, A_Plus: 100, A_Minus: 10 });
-    mockMeter.setCurrentPowerConsumed.mockRejectedValue(new Error('Request error: Forbidden'));
-
-    await start({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
-
-    expect(mockMeter.setCurrentPowerConsumed).toHaveBeenCalledWith('500');
-    expect(mockMeter.setExportedEnergyToday).toHaveBeenCalledWith('0');
-  });
-
-  // ---------------------------------------------------------------------------
-  // Daily baseline reset
-  // ---------------------------------------------------------------------------
-
-  it('resets the daily baseline at midnight (day change)', async () => {
-    const getDate = jest.spyOn(Date.prototype, 'getDate');
-    getDate.mockReturnValue(15);
-
-    mockGetCurrentData.mockResolvedValueOnce({ Watt: 0, Timestamp: 0, A_Plus: 100.0, A_Minus: 50.0 });
-
-    await start({ email: 'u@x.de', password: 'pw', pollIntervalSeconds: 30 });
-
-    getDate.mockReturnValue(16);
-
-    // New baseline = current reading → today = 0 Wh exported
-    mockGetCurrentData.mockResolvedValueOnce({ Watt: 0, Timestamp: 0, A_Plus: 102.0, A_Minus: 50.0 });
-
-    jest.advanceTimersByTime(30_000);
-    await flush();
-
-    expect(mockMeter.setExportedEnergyToday).toHaveBeenLastCalledWith('0');
-
-    getDate.mockRestore();
   });
 });

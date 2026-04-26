@@ -2,7 +2,7 @@ import { FreeAtHome, AddOn } from '@busch-jaeger/free-at-home';
 import { EnergyTwoWayMeterV2Channel } from '@busch-jaeger/free-at-home/lib/virtualChannels/energyTwoWayMeterV2Channel';
 import { PowerfoxClient } from './powerfoxClient';
 
-const VERSION = '1.4.0';
+const VERSION = '1.5.0';
 
 const freeAtHome = new FreeAtHome();
 freeAtHome.activateSignalHandling();
@@ -14,30 +14,20 @@ let pollTimer: ReturnType<typeof setInterval> | undefined;
 let meter: EnergyTwoWayMeterV2Channel | undefined;
 let isStartingUp = false;
 
-type Baseline = { exportKwh: number; importKwh: number; day: number };
-let dailyBaseline: Baseline | undefined;
-
 let consecutivePollErrors = 0;
-
-function saveBaseline(b: Baseline): void {
-  addOn.setApplicationState({ default: { items: { baseline: b } } })
-    .catch(e => console.error(`[powerfox] Baseline speichern fehlgeschlagen: ${e}`));
-}
 
 async function poll(client: PowerfoxClient, deviceId: string, prosumerMode: boolean): Promise<void> {
   try {
-    const data = await client.getCurrentData(deviceId);
+    const now = new Date();
+    const [data, report] = await Promise.all([
+      client.getCurrentData(deviceId),
+      client.getReport(deviceId, now),
+    ]);
 
-    const today = new Date().getDate();
-    if (!dailyBaseline || dailyBaseline.day !== today) {
-      dailyBaseline = { exportKwh: data.A_Minus ?? 0, importKwh: data.A_Plus, day: today };
-      saveBaseline(dailyBaseline);
-    }
+    const importedTodayWh = report.reduce((sum, e) => sum + e.A_Plus, 0) * 1000;
+    const exportedTodayWh = report.reduce((sum, e) => sum + (e.A_Minus ?? 0), 0) * 1000;
 
     if (!meter) return;
-
-    const importedTodayWh = (data.A_Plus - dailyBaseline.importKwh) * 1000;
-    const exportedTodayWh = ((data.A_Minus ?? 0) - dailyBaseline.exportKwh) * 1000;
 
     const updates: Array<[string, () => Promise<void>]> = [];
     if (prosumerMode) {
@@ -73,7 +63,7 @@ async function poll(client: PowerfoxClient, deviceId: string, prosumerMode: bool
 
     const outdatedNote = data.Outdated ? ' [Outdated]' : '';
     console.log(
-      `Powerfox | Leistung: ${data.Watt} W | Bezug gesamt: ${data.A_Plus} kWh | Einspeisung gesamt: ${data.A_Minus ?? 0} kWh${outdatedNote}`
+      `Powerfox | Leistung: ${data.Watt} W | Bezug heute: ${(importedTodayWh / 1000).toFixed(3)} kWh | Einspeisung heute: ${(exportedTodayWh / 1000).toFixed(3)} kWh${outdatedNote}`
     );
   } catch (error) {
     consecutivePollErrors++;
@@ -130,14 +120,6 @@ async function startPolling(email: string, password: string, intervalSeconds: nu
 
 console.log(`[powerfox] Addon gestartet (v${VERSION})`);
 
-addOn.on('applicationStateChanged', (state: AddOn.Configuration) => {
-  const saved = state['default']?.items?.['baseline'] as Baseline | undefined;
-  if (saved && typeof saved.day === 'number' && saved.day === new Date().getDate()) {
-    dailyBaseline = saved;
-    console.log(`[powerfox] Baseline geladen: Tag ${saved.day}, Export ${saved.exportKwh} kWh, Bezug ${saved.importKwh} kWh`);
-  }
-});
-
 addOn.on('configurationChanged', (configuration: AddOn.Configuration) => {
   const items = configuration['default']?.items;
   if (!items) return;
@@ -158,5 +140,4 @@ addOn.on('configurationChanged', (configuration: AddOn.Configuration) => {
   }
 });
 
-addOn.connectToApplicationState();
 addOn.connectToConfiguration();

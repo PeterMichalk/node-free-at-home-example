@@ -171,3 +171,44 @@ describe('PowerfoxClient – Error handling', () => {
     await expect(new PowerfoxClient('u@x.de', 'p').getCurrentData('abc')).rejects.toThrow('ECONNREFUSED');
   });
 });
+
+// ---------------------------------------------------------------------------
+// getReport
+// ---------------------------------------------------------------------------
+
+describe('PowerfoxClient.getReport()', () => {
+  it('calls the correct URL with zero-padded month and day', async () => {
+    mockResponse(200, JSON.stringify([]));
+    const date = new Date(2026, 3, 5); // April 5 2026 (month is 0-indexed)
+    await new PowerfoxClient('u@x.de', 'p').getReport('abc123', date);
+
+    expect(mockHttpsGet).toHaveBeenCalledWith(
+      'https://backend.powerfox.energy/api/2.0/my/abc123/report/2026/04/05?unit=kwh',
+      expect.anything(),
+      expect.any(Function),
+    );
+  });
+
+  it('returns an array of report entries', async () => {
+    const entries = [
+      { Timestamp: 1000, A_Plus: 0.5, A_Minus: 0.0 },
+      { Timestamp: 2000, A_Plus: 0.3, A_Minus: 1.2 },
+    ];
+    mockResponse(200, JSON.stringify(entries));
+    const date = new Date(2026, 3, 26);
+
+    const result = await new PowerfoxClient('u@x.de', 'p').getReport('abc', date);
+    expect(result).toEqual(entries);
+  });
+
+  it('returns an empty array when no data is available yet', async () => {
+    mockResponse(200, JSON.stringify([]));
+    const result = await new PowerfoxClient('u@x.de', 'p').getReport('abc', new Date());
+    expect(result).toEqual([]);
+  });
+
+  it('rejects with HTTP 403 (wrong credentials)', async () => {
+    mockResponse(403, 'Request error: Forbidden');
+    await expect(new PowerfoxClient('u@x.de', 'wrong').getReport('abc', new Date())).rejects.toThrow('403');
+  });
+});
