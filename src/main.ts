@@ -18,8 +18,26 @@ async function main() {
     console.log("dimming state is:", (value) ? "on" : "off");
   });
   virtualDimming.on("absoluteValueChanged", (value: number) => {
-    console.log("dimming value is:", value );
+    console.log("dimming value is:", value);
   });
+
+  // TV via MediaPlayer: supports inputs (HDMI), volume, mute, channels (playlists)
+  const virtualTV = await freeAtHome.createMediaPlayerDevice("tv001", "Virtual TV");
+  virtualTV.setAutoKeepAlive(true);
+  virtualTV.isAutoConfirm = true;
+
+  await virtualTV.setInputs(["HDMI 1", "HDMI 2", "AV", "TV"]);
+  await virtualTV.setInputIndex(0);
+  await virtualTV.setPlaylists(["ARD", "ZDF", "RTL", "SAT.1", "ProSieben"]);
+  await virtualTV.setAllowedActions({ canSkip: true, canSkipBack: true, canPause: true });
+
+  virtualTV.on('play', () => console.log("TV: on"));
+  virtualTV.on('pause', () => console.log("TV: standby"));
+  virtualTV.on('mute', () => console.log("TV: muted"));
+  virtualTV.on('unMute', () => console.log("TV: unmuted"));
+  virtualTV.on('volume', (value: number) => console.log("TV volume:", value));
+  virtualTV.on('input', (value: number) => console.log("TV input changed to index:", value));
+  virtualTV.on('playlist', (value: number) => console.log("TV channel changed to index:", value));
 }
 
 main();
